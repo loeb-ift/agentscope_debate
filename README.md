@@ -4,6 +4,18 @@
 
 ## 系統架構
 
+架構圖預覽：
+
+![architecture](diagrams/exports/architecture.svg)
+
+序列圖預覽：
+
+![debate sequence](diagrams/exports/debate_sequence.svg)
+
+ERD 預覽：
+
+![ERD](diagrams/exports/erd.svg)
+
 本專案採用微服務架構，主要包含以下組件：
 
 - **API Service (FastAPI)**: 提供 RESTful API，處理辯論創建、查詢和管理。

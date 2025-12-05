@@ -42,11 +42,14 @@ AgentScope Debate Platform 是一個基於 AgentScope 的自動化 AI 辯論平�
 ## 2. 系統架構與元件說明
 
 可視化圖表：
-- 架構圖（Mermaid）：diagrams/architecture.mmd
-- 序列圖（Mermaid）：diagrams/debate_sequence.mmd
-- 概念 ERD（Mermaid）：diagrams/erd.mmd
+- 架構圖（Mermaid 原始檔）：diagrams/architecture.mmd
+  - 匯出檔：SVG diagrams/exports/architecture.svg · PNG diagrams/exports/architecture.png
+- 序列圖（Mermaid 原始檔）：diagrams/debate_sequence.mmd
+  - 匯出檔：SVG diagrams/exports/debate_sequence.svg · PNG diagrams/exports/debate_sequence.png
+- 概念 ERD（Mermaid 原始檔）：diagrams/erd.mmd
+  - 匯出檔：SVG diagrams/exports/erd.svg · PNG diagrams/exports/erd.png
 
-您可在支援 Mermaid 的檔案檢視器或文件系統中直接渲染，或將內容貼至 mermaid.live 觀看。
+您可在支援 Mermaid 的檔案檢視器或文件系統中直接渲染，或將內容貼至 mermaid.live 觀看。並可在無 Mermaid 支援環境下使用已匯出的 SVG/PNG。
 
 主要元件：
 - API Service（FastAPI）
