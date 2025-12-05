@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+redis
+celery
+agentscope
+jsonschema
+hiredis
+pytest
+duckduckgo-search
+yfinance

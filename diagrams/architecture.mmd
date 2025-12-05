@@ -1,0 +1,51 @@
+%% Mermaid Diagram: System Architecture
+flowchart LR
+  subgraph Client
+    UI[Web UI / CLI]
+  end
+
+  subgraph API[API Service (FastAPI)]
+    A1[Routes: /api/v1/...]
+    A2[ToolRegistry]
+    A3[DB Session]
+  end
+
+  subgraph Worker[Worker Service (Celery)]
+    W1[run_debate_cycle]
+    W2[DebateCycle]
+    W3[Chairman]
+    W4[Tool Invoker]
+  end
+
+  subgraph Redis[Redis]
+    R1[(Broker)]
+    R2[(Backend)]
+    R3[(Cache / PubSub)]
+  end
+
+  subgraph Ext[External Services]
+    S1[SearXNG]
+    S2[DuckDuckGo]
+    S3[Yahoo Finance]
+    S4[TEJ]
+    LLM[Ollama]
+  end
+
+  subgraph DB[(SQLite / RDB)]
+    D1[(DebateArchive, Agent, ToolSet, AgentToolSet, PromptTemplate)]
+  end
+
+  UI -->|REST| API
+  API -->|Task Enqueue| R1
+  Worker -->|Consume| R1
+  Worker -->|Store Results| R2
+  API -->|Query Status| R2
+
+  A2 <-->|invoke_tool| W4
+  W4 -->|validate/cache/ratelimit| R3
+  W4 -->|HTTP/SDK| Ext
+
+  API -->|ORM| DB
+  Worker -->|ORM| DB
+
+  W1 --> W2 --> W3 --> LLM

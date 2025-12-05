@@ -1,0 +1,36 @@
+%% Mermaid Diagram: Debate Sequence
+sequenceDiagram
+  participant C as Client
+  participant API as API (FastAPI)
+  participant R as Redis (Broker/Backend)
+  participant W as Worker (Celery)
+  participant CH as Chairman
+  participant L as LLM (Ollama)
+  participant DB as Database
+
+  C->>API: POST /api/v1/debates {topic, config}
+  API->>R: Celery enqueue run_debate_cycle
+  Note right of API: return { task_id }
+  API-->>C: 201 Created + task_id
+
+  loop poll
+    C->>API: GET /api/v1/debates/{task_id}
+    API->>R: Query task status
+    API-->>C: PENDING / STARTED / SUCCESS
+  end
+
+  W->>CH: pre_debate_analysis(topic)
+  CH->>L: system+user prompts
+  L-->>CH: JSON analysis
+
+  loop Rounds
+    W->>W: alternate speakers pro/con
+    W->>R: gather evidence (list)
+    W->>CH: summarize_round
+    CH->>R: read evidence
+    CH-->>W: round summary
+  end
+
+  W->>DB: save DebateArchive
+  R-->>API: status SUCCESS
+  API-->>C: { status, result_ref }

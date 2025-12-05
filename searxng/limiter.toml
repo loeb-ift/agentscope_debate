@@ -1,0 +1,4 @@
+# Limiter configuration
+# See https://docs.searxng.org/admin/settings/settings_limiter.html
+
+[botdetection]

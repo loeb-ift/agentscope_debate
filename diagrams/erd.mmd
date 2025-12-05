@@ -1,0 +1,52 @@
+%% Mermaid Diagram: ERD (Conceptual)
+erDiagram
+  AGENT ||--o{ AGENT_TOOLSET : has
+  TOOLSET ||--o{ AGENT_TOOLSET : includes
+  AGENT ||--o{ DEBATE_ARCHIVE : participates_in
+
+  AGENT {
+    string id
+    string name
+    string role
+    string specialty
+    json   config_json
+    text   system_prompt
+    datetime created_at
+    datetime updated_at
+  }
+
+  TOOLSET {
+    string id
+    string name
+    string description
+    string[] tool_names
+    bool is_global
+    datetime created_at
+    datetime updated_at
+  }
+
+  AGENT_TOOLSET {
+    string id
+    string agent_id
+    string toolset_id
+    datetime created_at
+  }
+
+  PROMPT_TEMPLATE {
+    string id
+    string key
+    string language
+    text   content
+    string version
+    datetime created_at
+    datetime updated_at
+  }
+
+  DEBATE_ARCHIVE {
+    int id
+    string topic
+    json analysis_json
+    json[] rounds_json
+    json logs_json
+    datetime created_at
+  }

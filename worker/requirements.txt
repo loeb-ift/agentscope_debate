@@ -1,0 +1,11 @@
+celery
+redis
+agentscope
+jsonschema
+hiredis
+sqlalchemy
+python-dotenv
+requests
+duckduckgo-search
+ollama
+yfinance

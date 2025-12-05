@@ -1,0 +1,75 @@
+version: '3..8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "7860:7860"
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    volumes:
+      - .:/app
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - DATABASE_URL=sqlite:///data/debate.db
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - DATABASE_URL=sqlite:///data/debate.db
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - SEARXNG_URL=http://searxng:8080
+      - SEARXNG_HOST=http://searxng:8080
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+      - searxng
+    volumes:
+      - .:/app
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY}
+      - BING_SEARCH_API_KEY=${BING_SEARCH_API_KEY}
+      - GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY}
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
+    volumes:
+      - ./searxng:/etc/searxng
+    entrypoint: ["/bin/sh", "/etc/searxng/wrapper.sh"]
+
+volumes:
+  data:
