@@ -4,6 +4,9 @@ from agentscope.agent import AgentBase
 import redis
 import json
 import re
+import os
+import yaml
+from datetime import datetime
 from worker.llm_utils import call_llm
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
@@ -28,6 +31,7 @@ class DebateCycle:
         self.rounds_data = []
         self.analysis_result = {}
         self.history = []
+        self.full_history = []  # 完整歷史記錄（不壓縮，用於報告）
         self.compressed_history = "無"  # 存儲 LLM 壓縮後的歷史摘要
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
 
@@ -37,6 +41,39 @@ class DebateCycle:
         """
         message = json.dumps({"role": role, "content": content}, ensure_ascii=False)
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", message)
+        # Also store in history if not already
+        # (self.history is updated in _run_round, so we rely on that for the file report)
+
+    def _save_report_to_file(self, conclusion: str, jury_report: str = None):
+        """
+        將辯論過程保存為 Markdown 文件。
+        """
+        report_dir = "data/replays"
+        os.makedirs(report_dir, exist_ok=True)
+        filename = f"{self.debate_id}_{int(datetime.now().timestamp())}.md"
+        filepath = os.path.join(report_dir, filename)
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# 辯論報告：{self.topic}\n\n")
+            f.write(f"**ID**: {self.debate_id}\n")
+            f.write(f"**Date**: {CURRENT_DATE}\n\n")
+            
+            f.write("## 🏆 最終結論\n\n")
+            f.write(f"{conclusion}\n\n")
+
+            if jury_report:
+                f.write("## ⚖️ 評審團評估報告\n\n")
+                f.write(f"{jury_report}\n\n")
+            
+            f.write("## 📝 辯論過程記錄\n\n")
+            for item in self.full_history:
+                role = item.get("role", "Unknown")
+                content = item.get("content", "")
+                f.write(f"### {role}\n")
+                f.write(f"{content}\n\n")
+                f.write("---\n\n")
+                
+        print(f"Report saved to {filepath}")
 
     def start(self) -> Dict[str, Any]:
         """
@@ -76,9 +113,15 @@ class DebateCycle:
         final_conclusion = self.chairman.summarize_debate(self.debate_id, self.topic, self.rounds_data, handcard)
         self._publish_log("Chairman (Conclusion)", final_conclusion)
 
+        # 5. Jury 評估
+        jury_report = self._run_jury_evaluation(final_conclusion)
+
         # Record outcome to Task LTM
         with ReMeTaskLongTermMemory() as task_mem:
             task_mem.record(self.topic, final_conclusion)
+            
+        # Save to File (Markdown Report)
+        self._save_report_to_file(final_conclusion, jury_report)
 
         print(f"Debate '{self.debate_id}' has ended.")
         self._publish_log("System", f"Debate '{self.debate_id}' has ended.")
@@ -87,8 +130,64 @@ class DebateCycle:
             "topic": self.topic,
             "rounds_data": self.rounds_data,
             "analysis": self.analysis_result,
-            "final_conclusion": final_conclusion
+            "final_conclusion": final_conclusion,
+            "jury_report": jury_report
         }
+
+    def _run_jury_evaluation(self, final_conclusion: str) -> str:
+        """
+        執行評審團 (Jury) 評估，生成評分與分析報告。
+        """
+        print("Jury is evaluating the debate...")
+        self._publish_log("System", "評審團正在進行最終評估...")
+
+        try:
+            # Load Jury System Prompt (Priority: PromptService -> File -> Default)
+            file_system_prompt = "你是辯論評審團。"
+            try:
+                with open("prompts/agents/jury.yaml", "r", encoding="utf-8") as f:
+                    jury_config = yaml.safe_load(f)
+                    file_system_prompt = jury_config.get("system_prompt", file_system_prompt)
+            except Exception as e:
+                print(f"Warning: Failed to load jury.yaml: {e}")
+
+            db = SessionLocal()
+            try:
+                system_prompt = PromptService.get_prompt(db, "jury.system_prompt", default=file_system_prompt)
+            finally:
+                db.close()
+            
+            # 構建完整辯論記錄文字
+            debate_log = ""
+            for item in self.full_history:
+                role = item.get("role", "Unknown")
+                content = item.get("content", "")
+                debate_log += f"[{role}]: {content}\n\n"
+                
+            debate_log += f"[Chairman Final Conclusion]: {final_conclusion}\n"
+
+            user_prompt = f"""
+請根據以下完整的辯論記錄，生成「最終評估報告」。
+
+辯題：{self.topic}
+
+辯論記錄：
+{debate_log}
+
+請按照 System Prompt 的要求，輸出包含評分表與文字分析的報告。
+"""
+            # Call LLM
+            jury_report = call_llm(user_prompt, system_prompt=system_prompt)
+            
+            self._publish_log("Jury", jury_report)
+            print("Jury evaluation completed.")
+            return jury_report
+            
+        except Exception as e:
+            error_msg = f"Jury evaluation failed: {str(e)}"
+            print(error_msg)
+            self._publish_log("System", error_msg)
+            return error_msg
 
     def _run_round(self, round_num: int) -> Dict[str, Any]:
         """
@@ -101,6 +200,7 @@ class DebateCycle:
         opening = f"现在開始第 {round_num} 輪辯論。"
         self.chairman.speak(opening)
         self.history.append({"role": "Chairman", "content": opening})
+        self.full_history.append({"role": "Chairman", "content": opening})
         self._publish_log("Chairman", opening)
 
         # 2. 各團隊內部辯論與總結 (Intra-Team Debate & Summary)
@@ -121,6 +221,7 @@ class DebateCycle:
                 content = self._agent_turn(agent, team_name, round_num)
                 role_label = f"{team_name} - {agent.name}"
                 self.history.append({"role": role_label, "content": content})
+                self.full_history.append({"role": role_label, "content": content})
                 self._publish_log(role_label, content)
                 team_discussion_log.append(f"{agent.name}: {content}")
             
@@ -129,6 +230,7 @@ class DebateCycle:
             self._publish_log(f"{team_name} (Summary)", team_summary)
             round_team_summaries[team_name] = team_summary
             self.history.append({"role": f"{team_name} Summary", "content": team_summary})
+            self.full_history.append({"role": f"{team_name} Summary", "content": team_summary})
             
         # 3. 主席彙整與下一輪方向
         handcard = self.analysis_result.get('step6_handcard') or self.analysis_result.get('step5_summary', '無手卡')
@@ -147,6 +249,7 @@ class DebateCycle:
         
         # 將下一輪方向加入歷史，供下一輪 Agent 參考
         self.history.append({"role": "Chairman (Next Direction)", "content": next_direction})
+        self.full_history.append({"role": "Chairman (Next Direction)", "content": next_direction})
         
         return {
             "round": round_num,

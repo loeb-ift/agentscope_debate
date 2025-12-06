@@ -14,7 +14,7 @@ import os
 
 load_dotenv()
 
-from api import schemas, models
+from api import schemas, models, financial_models
 from api.database import SessionLocal, engine, init_db
 from api.init_data import initialize_all
 from worker.celery_app import app as celery_app
@@ -96,11 +96,13 @@ from api.agent_routes import router as agent_router
 from api.debate_routes import router as debate_router
 from api.prompt_routes import router as prompt_router
 from api.tool_routes import router as tool_router
+from api.internal_api import router as internal_router
 
 app.include_router(agent_router)
 app.include_router(debate_router)
 app.include_router(prompt_router)
 app.include_router(tool_router)
+app.include_router(internal_router)
 
 # --- ToolSet Management API ---
 

@@ -33,6 +33,29 @@ class Agent(AgentBase):
     class Config:
         orm_mode = True  # Pydantic v1 compatibility
 
+# --- Team Schemas ---
+
+class TeamBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+    member_ids: List[str] = []
+
+class TeamCreate(TeamBase):
+    pass
+
+class TeamUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    member_ids: Optional[List[str]] = None
+
+class Team(TeamBase):
+    id: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        orm_mode = True
+
 # --- Debate Schemas ---
 
 class DebateCreate(BaseModel):
@@ -96,6 +119,66 @@ class Tool(ToolBase):
 class ToolDescriptionGenerate(BaseModel):
     tool_type: str
     content: str # Code or Schema JSON
+
+# --- Financial Entity Schemas ---
+
+class CompanyBase(BaseModel):
+    company_id: str
+    company_name: str
+    ticker_symbol: Optional[str] = None
+    industry_sector: Optional[str] = None
+    market_cap: Optional[float] = None
+    country_of_incorporation: Optional[str] = None
+
+class CompanyCreate(CompanyBase):
+    pass
+
+class Company(CompanyBase):
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        orm_mode = True
+
+class SecurityBase(BaseModel):
+    security_id: str
+    security_name: str
+    security_type: str
+    issuer_company_id: Optional[str] = None
+    ticker: Optional[str] = None
+    isin: Optional[str] = None
+    market_cap: Optional[float] = None
+
+class SecurityCreate(SecurityBase):
+    pass
+
+class Security(SecurityBase):
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        orm_mode = True
+
+class FinancialTermBase(BaseModel):
+    term_id: str
+    term_name: str
+    term_category: Optional[str] = None
+    definition: Optional[str] = None
+
+class FinancialTermCreate(FinancialTermBase):
+    pass
+
+class FinancialTermUpdate(BaseModel):
+    term_name: Optional[str] = None
+    term_category: Optional[str] = None
+    definition: Optional[str] = None
+
+class FinancialTerm(FinancialTermBase):
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        orm_mode = True
 
 # --- Prompt Schemas ---
 

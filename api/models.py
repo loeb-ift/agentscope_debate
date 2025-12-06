@@ -1,10 +1,8 @@
 from sqlalchemy import create_engine, Column, Integer, String, JSON, DateTime, Boolean, Text
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import datetime
 import uuid
-
-Base = declarative_base()
+from api.database import Base
 
 class Agent(Base):
     """
@@ -111,3 +109,16 @@ class DebateTeam(Base):
     team_side = Column(String(20), nullable=False)  # 'pro', 'con', 'neutral'
     agent_ids = Column(JSON, nullable=False) # List of Agent IDs
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Team(Base):
+    """
+    Persistent Team Model (團隊模型).
+    """
+    __tablename__ = 'teams'
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    member_ids = Column(JSON, nullable=False) # List of Agent IDs
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

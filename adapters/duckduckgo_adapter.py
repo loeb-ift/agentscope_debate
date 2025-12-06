@@ -55,7 +55,7 @@ class DuckDuckGoAdapter(ToolAdapter):
             with DDGS() as ddgs:
                 raw_results = [r for r in ddgs.text(q, max_results=max_results)]
             
-            # Normalize the data
+            # 標準化數據
             normalized_data = []
             for item in raw_results:
                 normalized_data.append({

@@ -12,6 +12,7 @@ from adapters.http_tool_adapter import HTTPToolAdapter
 from adapters.python_tool_adapter import PythonToolAdapter
 from adapters.searxng_adapter import SearXNGAdapter
 from adapters.duckduckgo_adapter import DuckDuckGoAdapter
+from adapters.database_tool_adapter import SearchCompany, GetCompanyDetails, GetSecurityDetails
 from adapters.yfinance_adapter import YFinanceAdapter
 from adapters.tej_adapter import (
     TEJCompanyInfo, TEJStockPrice, TEJMonthlyRevenue, TEJInstitutionalHoldings,
@@ -63,6 +64,11 @@ tool_registry.register(TEJFinancialCoverQuarterly(), group="financial_data")
 tool_registry.register(TEJFuturesData(), group="financial_data")
 tool_registry.register(TEJOptionsBasicInfo(), group="financial_data")
 tool_registry.register(TEJOptionsDailyTrading(), group="financial_data")
+
+# Internal Data Group
+tool_registry.register(SearchCompany(), group="internal_data")
+tool_registry.register(GetCompanyDetails(), group="internal_data")
+tool_registry.register(GetSecurityDetails(), group="internal_data")
 
 # 在 worker 啟動時初始化資料庫與數據
 init_db()

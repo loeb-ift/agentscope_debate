@@ -77,7 +77,7 @@ class SearXNGAdapter(ToolAdapter):
             response.raise_for_status()
             raw_data = response.json()
             
-            # Normalize the data
+            # 標準化數據
             normalized_data = []
             for item in raw_data.get("results", [])[:limit]:
                 normalized_data.append({

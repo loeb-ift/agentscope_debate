@@ -2,24 +2,34 @@ from sqlalchemy.orm import Session
 from api import models
 import yaml
 import os
+import glob
 
-PROMPT_FILE_PATH = "prompts/system_prompts.yaml"
+PROMPTS_SYSTEM_DIR = "prompts/system"
 
 class PromptService:
     _file_cache = {}
 
     @classmethod
     def load_defaults_from_file(cls):
-        """從 YAML 文件加載預設 Prompt"""
-        if os.path.exists(PROMPT_FILE_PATH):
+        """從 YAML 文件加載預設 Prompt (掃描目錄)"""
+        cls._file_cache = {}
+        
+        if not os.path.exists(PROMPTS_SYSTEM_DIR):
+            print(f"Warning: Prompts directory not found at {PROMPTS_SYSTEM_DIR}")
+            return
+
+        yaml_files = glob.glob(os.path.join(PROMPTS_SYSTEM_DIR, "*.yaml"))
+        
+        for file_path in yaml_files:
             try:
-                with open(PROMPT_FILE_PATH, "r", encoding="utf-8") as f:
-                    cls._file_cache = yaml.safe_load(f) or {}
-                print(f"Loaded {len(cls._file_cache)} prompts from file.")
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                    if data and isinstance(data, dict):
+                        cls._file_cache.update(data)
             except Exception as e:
-                print(f"Error loading prompts file: {e}")
-        else:
-            print(f"Warning: Prompt file not found at {PROMPT_FILE_PATH}")
+                print(f"Error loading prompt file {file_path}: {e}")
+        
+        print(f"Loaded {len(cls._file_cache)} prompts from {len(yaml_files)} files.")
 
     @classmethod
     def initialize_db_from_file(cls, db: Session):

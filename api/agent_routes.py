@@ -157,3 +157,46 @@ def get_available_roles():
             }
         ]
     }
+
+# --- Team Management API ---
+
+@router.get("/api/v1/teams", response_model=List[schemas.Team])
+def list_teams(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return db.query(models.Team).offset(skip).limit(limit).all()
+
+@router.post("/api/v1/teams", response_model=schemas.Team, status_code=201)
+def create_team(team: schemas.TeamCreate, db: Session = Depends(get_db)):
+    # Ensure name uniqueness
+    if db.query(models.Team).filter(models.Team.name == team.name).first():
+        raise HTTPException(400, "Team name already exists")
+    
+    db_team = models.Team(**team.dict())
+    db.add(db_team)
+    db.commit()
+    db.refresh(db_team)
+    return db_team
+
+@router.get("/api/v1/teams/{team_id}", response_model=schemas.Team)
+def get_team(team_id: str, db: Session = Depends(get_db)):
+    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not team: raise HTTPException(404, "Team not found")
+    return team
+
+@router.put("/api/v1/teams/{team_id}", response_model=schemas.Team)
+def update_team(team_id: str, team_update: schemas.TeamUpdate, db: Session = Depends(get_db)):
+    db_team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not db_team: raise HTTPException(404, "Team not found")
+    
+    for field, value in team_update.dict(exclude_unset=True).items():
+        setattr(db_team, field, value)
+    db.commit()
+    db.refresh(db_team)
+    return db_team
+
+@router.delete("/api/v1/teams/{team_id}", status_code=204)
+def delete_team(team_id: str, db: Session = Depends(get_db)):
+    db_team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not db_team: raise HTTPException(404, "Team not found")
+    db.delete(db_team)
+    db.commit()
+    return None

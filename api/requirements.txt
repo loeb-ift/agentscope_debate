@@ -9,3 +9,4 @@ hiredis
 pytest
 duckduckgo-search
 yfinance
+PyYAML

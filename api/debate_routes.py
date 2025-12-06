@@ -3,8 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List
 from api import schemas, models
 from api.database import SessionLocal
+from api.config import Config
 import redis
 import os
+import glob
+from fastapi.responses import FileResponse
 from worker.celery_app import app as celery_app
 
 router = APIRouter()
@@ -27,15 +30,18 @@ def create_debate_config(config: schemas.DebateConfigCreate, db: Session = Depen
     創建辯論配置。
     """
     # 0. 驗證規則
-    # 規則 1: 每場辯論最多三團
-    if len(config.teams) > 3:
-        raise HTTPException(status_code=400, detail="每場辯論最多只能有三個辯論團")
+    # 0. 驗證規則
+    # 規則 1: 每場辯論最多三團 (Configurable via .env)
+    max_teams = Config.MAX_TEAMS_PER_DEBATE
+    if len(config.teams) > max_teams:
+        raise HTTPException(status_code=400, detail=f"每場辯論最多只能有 {max_teams} 個辯論團")
     
-    # 規則 2: 辯論團由 1-3 個代理組成
+    # 規則 2: 辯論團由 1-{max_members} 個代理組成
+    max_members = Config.MAX_MEMBERS_PER_TEAM
     all_debater_ids = set()
     for team in config.teams:
-        if not (1 <= len(team.agent_ids) <= 3):
-            raise HTTPException(status_code=400, detail=f"團隊 '{team.name}' 的代理人數必須為 1 到 3 人")
+        if not (1 <= len(team.agent_ids) <= max_members):
+            raise HTTPException(status_code=400, detail=f"團隊 '{team.name}' 的代理人數必須為 1 到 {max_members} 人")
         
         for agent_id in team.agent_ids:
             all_debater_ids.add(agent_id)
@@ -131,3 +137,44 @@ def launch_debate(config_id: str, db: Session = Depends(get_db)):
     redis_client.set(f"debate:{task.id}:config_id", config_id)
     
     return {"task_id": task.id, "status": "Debate launched", "config_id": config_id}
+
+@router.get("/api/v1/replays")
+def list_replays():
+    """列出所有 Markdown 辯論報告"""
+    report_dir = "data/replays"
+    if not os.path.exists(report_dir):
+        return []
+    
+    files = glob.glob(os.path.join(report_dir, "*.md"))
+    # Sort by modification time desc
+    files.sort(key=os.path.getmtime, reverse=True)
+    
+    replays = []
+    for f in files:
+        replays.append({
+            "filename": os.path.basename(f),
+            "path": f
+        })
+    return replays
+
+@router.get("/api/v1/replays/{filename}")
+def get_replay_content(filename: str):
+    """獲取指定報告的內容"""
+    report_dir = "data/replays"
+    filepath = os.path.join(report_dir, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Replay not found")
+    
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+    return {"content": content}
+
+@router.get("/api/v1/replays/{filename}/download")
+def download_replay(filename: str):
+    """下載指定報告"""
+    report_dir = "data/replays"
+    filepath = os.path.join(report_dir, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Replay not found")
+    
+    return FileResponse(filepath, filename=filename)
