@@ -31,51 +31,63 @@ def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
         message = result.get("message", {})
         content = message.get("content", "")
         
-        # Handle tool_calls if present
-        if not content and "tool_calls" in message:
+        # Handle tool_calls if present (Ollama standard format)
+        if "tool_calls" in message and message["tool_calls"]:
             tool_calls = message.get("tool_calls", [])
-            if tool_calls:
-                # Convert the first tool call to the expected JSON format
-                try:
-                    function_call = tool_calls[0]["function"]
-                    tool_name = function_call["name"]
-                    function_args = function_call["arguments"]
-                    
-                    print(f"DEBUG: Detected tool_call - name: {tool_name}, args type: {type(function_args)}")
-                    
-                    # Some models might return arguments as a string, others as a dict
-                    if isinstance(function_args, str):
-                        # Parse JSON string
+            print(f"DEBUG: Raw tool_calls detected: {tool_calls}")
+            
+            try:
+                # We currently only handle the first tool call
+                first_tool_call = tool_calls[0]
+                function_call = first_tool_call.get("function", {})
+                tool_name = function_call.get("name")
+                function_args = function_call.get("arguments", {})
+                
+                print(f"DEBUG: Processing tool_call - name: {tool_name}, args type: {type(function_args)}")
+                
+                # Normalize arguments to dict
+                if isinstance(function_args, str):
+                    try:
                         args_dict = json.loads(function_args)
-                    else:
-                        args_dict = function_args
-                    
-                    print(f"DEBUG: Parsed args_dict: {args_dict}")
-                    
-                    # Construct the JSON string our DebateCycle expects
-                    # Format: {"tool": "tool_name", "params": {...}}
-                    if "params" in args_dict:
-                        params = args_dict["params"]
-                    else:
-                        # The args_dict itself contains the params
-                        params = args_dict
-                        
-                    tool_call_json = {
-                        "tool": tool_name,
-                        "params": params
-                    }
-                    
-                    result_json = json.dumps(tool_call_json, ensure_ascii=False)
-                    print(f"DEBUG: Converted tool_call to JSON: {result_json}")
-                    return result_json
-                    
-                except Exception as e:
-                    print(f"ERROR: Failed to parse tool_calls: {e}")
-                    print(f"DEBUG: tool_calls structure: {tool_calls}")
-                    # Fall through to return empty content
+                    except json.JSONDecodeError:
+                         # Try to fix common JSON errors (like single quotes)
+                        try:
+                            args_dict = json.loads(function_args.replace("'", '"'))
+                        except:
+                            print(f"WARNING: Could not parse tool arguments string: {function_args}")
+                            args_dict = {}
+                else:
+                    args_dict = function_args
+                
+                print(f"DEBUG: Normalized args: {args_dict}")
+                
+                # Construct the JSON string our DebateCycle expects
+                # Format: {"tool": "tool_name", "params": {...}}
+                
+                # Check if params are nested or flat (flat is preferred/standard for function calling)
+                # If the model put everything under "params" key, extract it.
+                if "params" in args_dict and len(args_dict) == 1:
+                     params = args_dict["params"]
+                else:
+                     params = args_dict
+                
+                tool_call_obj = {
+                    "tool": tool_name,
+                    "params": params
+                }
+                
+                # Return this AS the content, so DebateCycle sees it as a JSON response
+                result_json = json.dumps(tool_call_obj, ensure_ascii=False)
+                print(f"DEBUG: Converted tool_call to standardized JSON: {result_json}")
+                return result_json
+                
+            except Exception as e:
+                print(f"ERROR: Failed to process tool_calls: {e}")
+                # Fallback to content if tool processing fails
 
         if not content:
-             print(f"WARNING: LLM returned empty content. Full result: {result}")
+             print(f"WARNING: LLM returned empty content and no valid tool_calls. Full result: {result}")
+             
         return content
     except Exception as e:
         print(f"Error calling LLM: {e}")

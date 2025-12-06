@@ -1,29 +1,29 @@
-%% Mermaid Diagram: System Architecture
+%% Mermaid Diagram: System Architecture (simplified)
 flowchart LR
   subgraph Client
     UI[Web UI / CLI]
   end
 
-  subgraph API[API Service (FastAPI)]
-    A1[Routes: /api/v1/...]
+  subgraph API
+    A1[FastAPI Routes]
     A2[ToolRegistry]
     A3[DB Session]
   end
 
-  subgraph Worker[Worker Service (Celery)]
+  subgraph Worker
     W1[run_debate_cycle]
     W2[DebateCycle]
     W3[Chairman]
     W4[Tool Invoker]
   end
 
-  subgraph Redis[Redis]
+  subgraph Redis
     R1[(Broker)]
     R2[(Backend)]
     R3[(Cache / PubSub)]
   end
 
-  subgraph Ext[External Services]
+  subgraph External
     S1[SearXNG]
     S2[DuckDuckGo]
     S3[Yahoo Finance]
@@ -31,8 +31,9 @@ flowchart LR
     LLM[Ollama]
   end
 
-  subgraph DB[(SQLite / RDB)]
-    D1[(DebateArchive, Agent, ToolSet, AgentToolSet, PromptTemplate)]
+  subgraph Database
+    D1[(SQLite / RDB)]
+    D2[(DebateArchive, Agent, ToolSet, AgentToolSet, PromptTemplate)]
   end
 
   UI -->|REST| API
@@ -43,9 +44,9 @@ flowchart LR
 
   A2 <-->|invoke_tool| W4
   W4 -->|validate/cache/ratelimit| R3
-  W4 -->|HTTP/SDK| Ext
+  W4 -->|HTTP/SDK| External
 
-  API -->|ORM| DB
-  Worker -->|ORM| DB
+  API -->|ORM| Database
+  Worker -->|ORM| Database
 
   W1 --> W2 --> W3 --> LLM

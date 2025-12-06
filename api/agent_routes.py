@@ -1,7 +1,23 @@
 
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List, Optional
+from api import schemas, models
+from api.database import SessionLocal
+
+router = APIRouter()
+
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 # --- Agent Management API ---
 
-@app.get("/api/v1/agents", response_model=List[schemas.Agent])
+@router.get("/api/v1/agents", response_model=List[schemas.Agent])
 def list_agents(
     skip: int = 0,
     limit: int = 100,
@@ -23,7 +39,7 @@ def list_agents(
     agents = query.offset(skip).limit(limit).all()
     return agents
 
-@app.post("/api/v1/agents", response_model=schemas.Agent, status_code=201)
+@router.post("/api/v1/agents", response_model=schemas.Agent, status_code=201)
 def create_agent(agent: schemas.AgentCreate, db: Session = Depends(get_db)):
     """
     創建新的 Agent。
@@ -51,7 +67,7 @@ def create_agent(agent: schemas.AgentCreate, db: Session = Depends(get_db)):
     
     return db_agent
 
-@app.get("/api/v1/agents/{agent_id}", response_model=schemas.Agent)
+@router.get("/api/v1/agents/{agent_id}", response_model=schemas.Agent)
 def get_agent(agent_id: str, db: Session = Depends(get_db)):
     """
     獲取特定 Agent 的詳細資訊。
@@ -63,7 +79,7 @@ def get_agent(agent_id: str, db: Session = Depends(get_db)):
     
     return agent
 
-@app.put("/api/v1/agents/{agent_id}", response_model=schemas.Agent)
+@router.put("/api/v1/agents/{agent_id}", response_model=schemas.Agent)
 def update_agent(
     agent_id: str,
     agent_update: schemas.AgentUpdate,
@@ -98,7 +114,7 @@ def update_agent(
     
     return db_agent
 
-@app.delete("/api/v1/agents/{agent_id}", status_code=204)
+@router.delete("/api/v1/agents/{agent_id}", status_code=204)
 def delete_agent(agent_id: str, db: Session = Depends(get_db)):
     """
     刪除 Agent。
@@ -117,7 +133,7 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)):
     
     return None
 
-@app.get("/api/v1/agents/roles/available")
+@router.get("/api/v1/agents/roles/available")
 def get_available_roles():
     """
     獲取可用的 Agent 角色列表。

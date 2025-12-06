@@ -3,69 +3,8 @@
 確保所有代理對可用工具有一致的認知。
 """
 
-# 工具列表定義
-AVAILABLE_TOOLS = {
-    "tej": {
-        "category": "TEJ 台股工具",
-        "description": "用於台灣股市分析",
-        "tools": [
-            {
-                "name": "tej.stock_price",
-                "description": "查詢台股股價數據（開高低收、成交量、報酬率、本益比等）",
-                "params": "coid='股票代碼', start_date='YYYY-MM-DD', end_date='YYYY-MM-DD', limit=數量",
-                "example": '{"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01", "end_date": "2024-12-31", "limit": 300}}'
-            },
-            {
-                "name": "tej.company_info",
-                "description": "查詢公司基本資料（產業、成立日、董事長、資本額等）",
-                "params": "coid='股票代碼'",
-                "example": '{"tool": "tej.company_info", "params": {"coid": "2330"}}'
-            },
-            {
-                "name": "tej.monthly_revenue",
-                "description": "查詢月營收數據（單月營收、年增率、累計營收等）",
-                "params": "coid='股票代碼', start_date='YYYY-MM-DD', end_date='YYYY-MM-DD'",
-                "example": '{"tool": "tej.monthly_revenue", "params": {"coid": "2330"}}'
-            },
-            {
-                "name": "tej.institutional_holdings",
-                "description": "查詢三大法人買賣超（外資、投信、自營商）",
-                "params": "coid='股票代碼', start_date='YYYY-MM-DD', end_date='YYYY-MM-DD'",
-                "example": '{"tool": "tej.institutional_holdings", "params": {"coid": "2330"}}'
-            },
-            {
-                "name": "tej.margin_trading",
-                "description": "查詢融資融券數據（融資餘額、融券餘額、使用率等）",
-                "params": "coid='股票代碼', start_date='YYYY-MM-DD', end_date='YYYY-MM-DD'",
-                "example": '{"tool": "tej.margin_trading", "params": {"coid": "2330"}}'
-            },
-            {
-                "name": "tej.financial_summary",
-                "description": "查詢財務報表（營收、EPS、ROE、資產負債等）",
-                "params": "coid='股票代碼'",
-                "example": '{"tool": "tej.financial_summary", "params": {"coid": "2330"}}'
-            }
-        ]
-    },
-    "general": {
-        "category": "一般工具",
-        "description": "用於網頁搜尋和國際股市查詢",
-        "tools": [
-            {
-                "name": "searxng.search",
-                "description": "網頁搜尋",
-                "params": "q='關鍵字', engines='google cse'",
-                "example": '{"tool": "searxng.search", "params": {"q": "台積電 2024 Q4", "engines": "google cse"}}'
-            },
-            {
-                "name": "yfinance.stock_info",
-                "description": "國際股票查詢",
-                "params": "symbol='股票代碼'",
-                "example": '{"tool": "yfinance.stock_info", "params": {"symbol": "TSM"}}'
-            }
-        ]
-    }
-}
+from api.tool_registry import tool_registry
+import json
 
 # 重要常數
 STOCK_CODES = {
@@ -79,14 +18,27 @@ CURRENT_DATE = "2025-12-05"
 def get_tools_description() -> str:
     """
     生成工具列表的文字描述，供 prompt 使用。
+    從 ToolRegistry 動態獲取，確保包含詳細的欄位說明。
     """
     desc = "**可用工具列表**：\n"
     
-    for category_key, category_data in AVAILABLE_TOOLS.items():
-        desc += f"\n{category_data['category']}（{category_data['description']}）：\n"
-        for tool in category_data['tools']:
-            desc += f"  - `{tool['name']}`: {tool['description']}\n"
-            desc += f"    參數: {tool['params']}\n"
+    # 按群組分類
+    tools = tool_registry.list()
+    grouped_tools = {}
+    
+    for name, data in tools.items():
+        group = data.get('group', 'basic')
+        if group not in grouped_tools:
+            grouped_tools[group] = []
+        grouped_tools[group].append((name, data))
+    
+    for group, items in grouped_tools.items():
+        desc += f"\n### {group.upper()} 工具組：\n"
+        for name, data in items:
+            desc += f"- **{name}** (v{data['version']})\n"
+            # 使用 Adapter 中定義的詳細描述 (包含欄位說明)
+            desc += f"  描述: {data['description']}\n"
+            desc += f"  Schema: {json.dumps(data['schema'], ensure_ascii=False)}\n"
     
     return desc
 
@@ -94,11 +46,11 @@ def get_tools_examples() -> str:
     """
     生成工具調用範例，供 prompt 使用。
     """
-    examples = "**工具調用範例**：\n"
-    
-    for category_key, category_data in AVAILABLE_TOOLS.items():
-        for tool in category_data['tools'][:2]:  # 只顯示前 2 個範例
-            examples += f"  {tool['example']}\n"
+    # 這裡為了簡化，手動定義一些核心範例，或者也可以讓 ToolAdapter 提供 example
+    examples = "**核心工具調用範例**：\n"
+    examples += '1. 搜尋: {"tool": "searxng.search", "params": {"q": "台積電 2024 Q4 營收"}}\n'
+    examples += '2. 股價: {"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01"}}\n'
+    examples += '3. 財報: {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
     
     return examples
 

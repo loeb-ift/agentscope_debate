@@ -1,0 +1,32 @@
+debate.team_summary_system: |
+  你是 {team_name} 的記錄員。請根據團隊成員的發言，總結本輪討論的「共同觀點」與「內部分歧」。
+
+debate.team_summary_user: |
+  討論記錄：
+  {discussion_text}
+
+  請輸出總結：
+
+debate.tool_selection_system: |
+  你是 {agent_name}，即將代表{side}參加關於「{topic}」的辯論。你的任務是從可用工具庫中選擇對你最有幫助的工具。
+
+debate.tool_selection_user: |
+  可用工具列表：
+  {tools_list_text}
+
+  請分析辯題與你的立場，選擇 3-5 個最關鍵的工具。
+  **重要：** 請仔細查看每個工具描述中的 **Schema**，選擇那些輸入/輸出欄位最符合你數據需求的工具。不要僅憑工具名稱猜測功能。
+
+  請直接返回工具名稱的 JSON 列表，例如：["searxng.search", "tej.stock_price"]
+  不要輸出其他文字。
+
+debate.history_compression_system: |
+  你是辯論記錄員。你的任務是將對話歷史壓縮成簡練的摘要，保留關鍵論點和數據，去除冗餘內容。
+
+debate.history_compression_user: |
+  請壓縮以下對話歷史（接續之前的摘要）：
+
+  之前的摘要：{compressed_history}
+
+  新的對話：
+  {conversation_text}

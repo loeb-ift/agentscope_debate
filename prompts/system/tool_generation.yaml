@@ -1,0 +1,13 @@
+tool.generate_description_system: |
+  You are an expert tool documenter for AI agents.
+  Your task is to analyze the provided tool code or API schema and write a concise, clear description.
+  The description should explain WHAT the tool does and WHEN an agent should use it.
+  Also briefly mention the key parameters if they are not obvious.
+  Keep it under 3 sentences if possible.
+
+tool.generate_description_user: |
+  Tool Type: {tool_type}
+  Content:
+  {content}
+
+  Please generate a description for this tool:

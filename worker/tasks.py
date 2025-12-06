@@ -19,54 +19,46 @@ from api.database import SessionLocal
 from api import models
 
 @app.task(bind=True)
-def run_debate_cycle(self, topic: str, pro_team_configs: List[Dict], con_team_configs: List[Dict], rounds: int):
+def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
     """
     執行辯論循環並將結果存檔。
+    teams_config format: [{"name": "Team A", "side": "pro", "agents": [...]}, ...]
     """
     debate_id = self.request.id
     chairman = Chairman(name="主席")
     
-    # 如果沒有提供正方隊伍配置，創建預設 Agent
-    pro_team = []
-    if not pro_team_configs or len(pro_team_configs) == 0:
-        # 創建預設的正方 Agent
-        for i in range(2):  # 預設 2 個 Agent
-            agent = AgentBase()
-            agent.name = f"正方辯士 {i+1}"
-            pro_team.append(agent)
-    else:
-        for c in pro_team_configs:
-            agent = AgentBase()
-            # 處理字串或字典類型
-            if isinstance(c, dict):
-                agent.name = c.get('name', f"正方辯士")
-            elif isinstance(c, str):
-                agent.name = f"正方辯士 ({c[:8]})"  # 使用 ID 的前 8 個字符
-            else:
-                agent.name = "正方辯士"
-            pro_team.append(agent)
+    debate_teams = []
+    for t_config in teams_config:
+        team_agents = []
+        agent_configs = t_config.get("agents", [])
+        
+        if not agent_configs:
+            # Default fallback (should happen rarely if validated upstream)
+             for i in range(2):
+                agent = AgentBase()
+                agent.name = f"{t_config.get('name', '辯士')} {i+1}"
+                team_agents.append(agent)
+        else:
+            for c in agent_configs:
+                agent = AgentBase()
+                if isinstance(c, dict):
+                    agent.name = c.get('name', '辯士')
+                else:
+                    agent.name = "辯士"
+                team_agents.append(agent)
+        
+        debate_teams.append({
+            "name": t_config.get("name"),
+            "side": t_config.get("side"),
+            "agents": team_agents
+        })
     
-    # 如果沒有提供反方隊伍配置，創建預設 Agent
-    con_team = []
-    if not con_team_configs or len(con_team_configs) == 0:
-        # 創建預設的反方 Agent
-        for i in range(2):  # 預設 2 個 Agent
-            agent = AgentBase()
-            agent.name = f"反方辯士 {i+1}"
-            con_team.append(agent)
-    else:
-        for c in con_team_configs:
-            agent = AgentBase()
-            # 處理字串或字典類型
-            if isinstance(c, dict):
-                agent.name = c.get('name', f"反方辯士")
-            elif isinstance(c, str):
-                agent.name = f"反方辯士 ({c[:8]})"  # 使用 ID 的前 8 個字符
-            else:
-                agent.name = "反方辯士"
-            con_team.append(agent)
+    # Fallback for legacy calls (if any) or empty teams
+    if not debate_teams:
+        # Create default pro/con
+        pass
 
-    debate = DebateCycle(debate_id, topic, chairman, pro_team, con_team, rounds)
+    debate = DebateCycle(debate_id, topic, chairman, debate_teams, rounds)
     debate_result = debate.start()
 
     db = SessionLocal()

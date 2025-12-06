@@ -17,9 +17,9 @@ class ToolRegistry:
         param_string = json.dumps(params, sort_keys=True)
         return f"cache:{tool_id}:{hashlib.md5(param_string.encode()).hexdigest()}"
 
-    def register(self, tool: Any, version: str = "v1"):
+    def register(self, tool: Any, version: str = "v1", group: str = "basic"):
         """
-        註冊一個新的工具，並指定版本。
+        註冊一個新的工具，並指定版本和工具組。
         """
         if not all(hasattr(tool, attr) for attr in ['name', 'describe', 'invoke']):
             raise ValueError("Tool must have name, describe, and invoke attributes")
@@ -32,13 +32,14 @@ class ToolRegistry:
             "instance": tool,
             "description": tool.describe(),
             "version": version,
+            "group": group,
             "schema": getattr(tool, 'schema', None),
             "auth_config": getattr(tool, 'auth_config', None),
             "rate_limit_config": getattr(tool, 'rate_limit_config', None),
             "cache_ttl": getattr(tool, 'cache_ttl', None), # in seconds
             "error_mapping": getattr(tool, 'error_mapping', None)
         }
-        print(f"Tool '{tool_id}' registered successfully.")
+        print(f"Tool '{tool_id}' registered successfully (group: {group}).")
 
     def get_tool_data(self, tool_name: str, version: str = "v1") -> Dict[str, Any]:
         """
@@ -133,17 +134,21 @@ class ToolRegistry:
         result["used_cache"] = False
         return result
 
-    def list(self) -> Dict[str, Any]:
+    def list(self, groups: list[str] = None) -> Dict[str, Any]:
         """
         列出所有已註冊的工具及其詳細資訊。
+        如果指定了 groups，則只返回屬於這些組的工具。
         """
-        return {
-            name: {
-                "description": data["description"],
-                "version": data["version"],
-                "schema": data["schema"]
-            } for name, data in self._tools.items()
-        }
+        result = {}
+        for name, data in self._tools.items():
+            if groups is None or data.get("group", "basic") in groups:
+                result[name] = {
+                    "description": data["description"],
+                    "version": data["version"],
+                    "group": data.get("group", "basic"),
+                    "schema": data["schema"]
+                }
+        return result
     
     def list_tools(self) -> Dict[str, Any]:
         """

@@ -32,6 +32,9 @@ class Tool(Base):
     type = Column(String, nullable=False)
     json_schema = Column(JSON, nullable=False)
     enabled = Column(Boolean, default=True)
+    api_config = Column(JSON, nullable=True) # URL, method, headers for HTTP tools
+    python_code = Column(Text, nullable=True) # Python code for python tools
+    group = Column(String, default="basic")
 
 class ToolSet(Base):
     """
@@ -81,4 +84,30 @@ class DebateArchive(Base):
     analysis_json = Column(JSON, nullable=False)
     rounds_json = Column(JSON, nullable=False)
     logs_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class DebateConfig(Base):
+    """
+    辯論配置模型。
+    """
+    __tablename__ = 'debate_configs'
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    topic = Column(Text, nullable=False)
+    chairman_id = Column(String(36), nullable=True)  # Agent ID
+    rounds = Column(Integer, default=3)
+    enable_cross_examination = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class DebateTeam(Base):
+    """
+    辯論隊伍模型。
+    """
+    __tablename__ = 'debate_teams'
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    debate_id = Column(String(36), nullable=False) # 關聯到 DebateConfig.id
+    team_name = Column(String(100), nullable=False)
+    team_side = Column(String(20), nullable=False)  # 'pro', 'con', 'neutral'
+    agent_ids = Column(JSON, nullable=False) # List of Agent IDs
     created_at = Column(DateTime(timezone=True), server_default=func.now())

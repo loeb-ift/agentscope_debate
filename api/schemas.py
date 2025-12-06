@@ -39,6 +39,25 @@ class DebateCreate(BaseModel):
     topic: str
     config: Dict[str, Any]
 
+class TeamConfig(BaseModel):
+    name: str
+    side: str = Field(..., description="pro, con, or neutral")
+    agent_ids: List[str]
+
+class DebateConfigCreate(BaseModel):
+    topic: str
+    chairman_id: Optional[str] = None
+    teams: List[TeamConfig]
+    rounds: int = 3
+    enable_cross_examination: bool = True
+
+class DebateConfigResponse(DebateConfigCreate):
+    id: str
+    created_at: datetime.datetime
+    
+    class Config:
+        orm_mode = True
+
 class DebateArchive(BaseModel):
     id: int
     topic: str
@@ -55,3 +74,46 @@ class DebateArchive(BaseModel):
 class ToolTest(BaseModel):
     name: str
     kwargs: Dict[str, Any]
+
+class ToolBase(BaseModel):
+    name: str
+    type: str = "http"
+    json_schema: Dict[str, Any]
+    api_config: Optional[Dict[str, Any]] = None
+    python_code: Optional[str] = None
+    group: str = "basic"
+    enabled: bool = True
+
+class ToolCreate(ToolBase):
+    pass
+
+class Tool(ToolBase):
+    id: int
+    
+    class Config:
+        orm_mode = True
+
+class ToolDescriptionGenerate(BaseModel):
+    tool_type: str
+    content: str # Code or Schema JSON
+
+# --- Prompt Schemas ---
+
+class PromptTemplateBase(BaseModel):
+    key: str
+    language: str = "zh-TW"
+    content: str
+    version: int = 1
+
+class PromptTemplateCreate(PromptTemplateBase):
+    pass
+
+class PromptTemplateUpdate(BaseModel):
+    content: Optional[str] = None
+    version: Optional[int] = None
+
+class PromptTemplate(PromptTemplateBase):
+    id: int
+    
+    class Config:
+        orm_mode = True
