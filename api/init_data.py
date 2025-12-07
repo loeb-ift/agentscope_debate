@@ -9,45 +9,83 @@ import yaml
 import os
 import glob
 from api.financial_terms_data import FINANCIAL_TERMS_DATA
+import json
 
 PROMPTS_AGENTS_DIR = "prompts/agents"
 
 def initialize_financial_terms(db: Session):
-    """初始化金融術語對照表"""
+    """初始化金融術語對照表（從內建資料與 JSON 種子檔）"""
     print("Initializing financial terms...")
-    
-    # Check if any terms exist
+
+    # 若表已有資料，略過（避免重複種子）
     if db.query(models.FinancialTerm).first():
         print("Financial terms already exist, skipping initialization.")
         return
 
     terms_to_create = []
+
+    # 1) 先載入 data/seeds/financial_terms.zh-TW.json（若存在）
+    seed_path = os.path.join("data", "seeds", "financial_terms.zh-TW.json")
+    if os.path.exists(seed_path):
+        try:
+            with open(seed_path, "r", encoding="utf-8") as f:
+                seed = json.load(f)
+                for item in seed.get("terms", []):
+                    term_id = item.get("id")
+                    zh_name = item.get("name")
+                    category = item.get("category")
+                    definition = item.get("definition")
+                    meta = {
+                        "aliases": item.get("aliases"),
+                        "tags": item.get("tags"),
+                        "lang": item.get("lang"),
+                        "version": item.get("version"),
+                        "formula": item.get("formula"),
+                        "notes": item.get("notes")
+                    }
+                    if not term_id:
+                        term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
+                    terms_to_create.append(models.FinancialTerm(
+                        term_id=term_id,
+                        term_name=zh_name,
+                        term_category=category,
+                        definition=definition,
+                        meta=meta
+                    ))
+        except Exception as e:
+            print(f"Warning: failed to load seed financial terms from JSON: {e}")
+
+    # 2) 再補充 api/financial_terms_data.py 內建資料（避免與上面重複）
+    existing_ids = {t.term_id for t in terms_to_create}
     for item in FINANCIAL_TERMS_DATA:
-        # Check if item is tuple (old format) or dict (new format)
         if isinstance(item, tuple):
             zh_name, en_name, category = item
             term_id = f"{category}_{en_name}".lower().replace(" ", "_").replace(",", "").replace(".", "").replace("&", "and")[:50]
             definition = en_name
+            meta = None
         elif isinstance(item, dict):
             term_id = item.get("id")
             zh_name = item.get("name")
             category = item.get("category")
             definition = item.get("definition")
-            
+            meta = None
             if not term_id:
-                 term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
-        
-        term = models.FinancialTerm(
+                term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
+        if term_id in existing_ids:
+            continue
+        terms_to_create.append(models.FinancialTerm(
             term_id=term_id,
             term_name=zh_name,
             term_category=category,
-            definition=definition
-        )
-        terms_to_create.append(term)
-    
+            definition=definition,
+            meta=meta
+        ))
+
+    # 寫入 DB
     try:
-        db.bulk_save_objects(terms_to_create)
-        db.commit()
+        if terms_to_create:
+            db.bulk_save_objects(terms_to_create)
+            db.commit()
         print(f"Initialized {len(terms_to_create)} financial terms.")
     except Exception as e:
         print(f"Error initializing financial terms: {e}")

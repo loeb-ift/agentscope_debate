@@ -1,0 +1,466 @@
+{
+  "metadata": {
+    "lang": "zh-TW",
+    "source": "user_provided_long_list_v1",
+    "version": 1,
+    "created_at": "2025-12-07"
+  },
+  "terms": [
+    {
+      "id": "market_capital",
+      "name": "資本市場",
+      "category": "MarketStructure",
+      "definition": "資本市場是指證券融資和經營一年以上中長期資金借貸的金融市場。貨幣市場是經營一年以內短期資金融通的金融市場，資金需求者通過資本市場籌集長期資金，通過貨幣市場籌集短期資金。",
+      "aliases": ["資本市場 Capital Market", "Capital Market"],
+      "tags": ["市場結構"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "stock",
+      "name": "股票",
+      "category": "Stocks",
+      "definition": "股票是股份有限公司在籌集資本時向出資人發行的股份憑證，代表其持有者對股份公司的所有權。具不可償還性、參與性、收益性、流通性、價格波動性與風險性。",
+      "aliases": ["普通股", "普通股票"],
+      "tags": ["權益", "所有權"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "bond",
+      "name": "債券",
+      "category": "Bonds",
+      "definition": "債券是政府、金融機構、工商企業等向投資者發行並承諾按一定利率支付利息、並按約定條件償還本金的債權債務憑證。特徵：償還性、流通性、安全性、收益性。",
+      "aliases": ["固定收益", "債務證券"],
+      "tags": ["固定收益"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "convertible_security",
+      "name": "可轉換證券",
+      "category": "Securities",
+      "definition": "持有人有權將其轉換成為另一種不同性質的證券，主要包括可轉換公司債與可轉換優先股。",
+      "aliases": ["轉換證券", "可轉債/可轉優先股"],
+      "tags": ["混合證券"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "warrant",
+      "name": "權證",
+      "category": "Derivatives",
+      "definition": "由標的證券發行人或第三方發行，約定持有人在規定期間或到期日，按約定價格買入或賣出標的證券，或以現金結算差價的有價證券。",
+      "aliases": ["Warrant"],
+      "tags": ["衍生性商品"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "call_warrant",
+      "name": "認購權證",
+      "category": "Derivatives",
+      "definition": "持有人在規定期間或到期日，有權按約定價格向發行人購買標的證券的有價證券。",
+      "aliases": ["Call Warrant", "買權權證"],
+      "tags": ["權證"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "put_warrant",
+      "name": "認沽權證",
+      "category": "Derivatives",
+      "definition": "持有人在規定期間或到期日，有權按約定價格向發行人出售標的證券的有價證券。",
+      "aliases": ["Put Warrant", "賣權權證"],
+      "tags": ["權證"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "fund",
+      "name": "證券投資基金",
+      "category": "Funds",
+      "definition": "透過發行基金單位，集中投資者資金，由基金管理人運用、基金託管人託管，投資股票、債券等金融工具的集合投資方式，利益共享、風險共擔。",
+      "aliases": ["基金", "投資基金"],
+      "tags": ["集合投資"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "open_end_fund",
+      "name": "開放式基金",
+      "category": "Funds",
+      "definition": "基金發行總額不固定，基金單位總數可隨時增減，投資者可按基金報價申購或贖回基金單位。",
+      "aliases": ["開放式", "Open-end Fund"],
+      "tags": ["基金類型"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "closed_end_fund",
+      "name": "封閉式基金",
+      "category": "Funds",
+      "definition": "事先確定發行總額，在封閉期內基金單位總數不變。基金上市後投資者可在證券市場買賣基金單位。",
+      "aliases": ["封閉式", "Closed-end Fund"],
+      "tags": ["基金類型"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "primary_market",
+      "name": "一級市場",
+      "category": "MarketStructure",
+      "definition": "股票的初級（發行）市場，投資者可認購公司首次或再次發行的股票。",
+      "aliases": ["發行市場", "Primary Market"],
+      "tags": ["市場結構"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "ipo",
+      "name": "IPO 首次公開募股",
+      "category": "CorporateActions",
+      "definition": "公司首次向社會公眾公開招股的發行方式（Initial Public Offering）。",
+      "aliases": ["首次公開發行", "Initial Public Offering"],
+      "tags": ["發行"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "issue_price",
+      "name": "發行價",
+      "category": "CorporateActions",
+      "definition": "股票上市發行時，公司為確保發行成功與自身利益，按面值以外制定的合理價格。",
+      "aliases": ["發行價格"],
+      "tags": ["定價"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "premium_issue",
+      "name": "溢價發行",
+      "category": "CorporateActions",
+      "definition": "公司以高於面值的價格發行新股或現金增資。",
+      "aliases": ["溢價"],
+      "tags": ["定價", "發行"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "discount_issue",
+      "name": "折價發行",
+      "category": "CorporateActions",
+      "definition": "公司以低於面值的價格發行股票。",
+      "aliases": ["折價"],
+      "tags": ["定價", "發行"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "secondary_market",
+      "name": "二級市場",
+      "category": "MarketStructure",
+      "definition": "流通市場，已發行股票進行買賣交易的場所。",
+      "aliases": ["交易市場", "Secondary Market"],
+      "tags": ["市場結構"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "a_share",
+      "name": "A股",
+      "category": "Stocks",
+      "definition": "人民幣普通股票。通常在中國境內交易所以人民幣計價交易。",
+      "aliases": ["A Share"],
+      "tags": ["市場板塊"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "b_share",
+      "name": "B股",
+      "category": "Stocks",
+      "definition": "人民幣特種股票。一般以外幣計價並在中國境內交易所上市。",
+      "aliases": ["B Share"],
+      "tags": ["市場板塊"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "h_share",
+      "name": "H股",
+      "category": "Stocks",
+      "definition": "註冊地在中國內地、在香港上市的外資股。",
+      "aliases": ["H Share"],
+      "tags": ["市場板塊", "香港"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "st_stock",
+      "name": "ST股票",
+      "category": "Stocks",
+      "definition": "因經營虧損或其他異常情況，中國證監會為提醒投資者注意而特別處理（Special Treatment）的股票。",
+      "aliases": ["ST", "Special Treatment"],
+      "tags": ["風險警示"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "原清單有兩條 ST 股票定義（21與22），此處合併為一致定義。"
+    },
+    {
+      "id": "blue_chip",
+      "name": "藍籌股",
+      "category": "Stocks",
+      "definition": "資本雄厚、股本和市值較大、信譽優良的上市公司股票。",
+      "aliases": ["Blue Chip"],
+      "tags": ["板塊"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "red_chip",
+      "name": "紅籌股",
+      "category": "Stocks",
+      "definition": "在境外註冊、在香港上市但具中國大陸概念的公司所發行之股票。",
+      "aliases": ["Red Chip"],
+      "tags": ["板塊", "香港"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "value_stock",
+      "name": "績優股",
+      "category": "Stocks",
+      "definition": "過去幾年業績與盈餘較佳，未來仍可看好但高度成長性有限的公司股票。",
+      "aliases": ["優質股"],
+      "tags": ["基本面"],
+      "lang": "zh-TW",
+      "version": 1
+    },
+    {
+      "id": "junk_stock",
+      "name": "垃圾股",
+      "category": "Stocks",
+      "definition": "業績較差、前景不佳或經營不善之公司的股票，常見股價低迷、交投不活躍、分紅差。",
+      "aliases": ["劣質股"],
+      "tags": ["風險"],
+      "lang": "zh-TW",
+      "version": 1
+    }
+    
+    
+    
+    ,
+    {
+      "id": "ex_dividend_reference_price",
+      "name": "除息參考價",
+      "category": "CorporateActions",
+      "definition": "除息後的參考股價計算方式。",
+      "aliases": [],
+      "tags": ["參考價", "除息"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "除息參考價 = 前一日收盤價 - 現金股息",
+      "notes": "未考慮稅負與交易成本，實際開盤價可能受市場供需影響而偏離。"
+    },
+    {
+      "id": "ex_rights_reference_price",
+      "name": "除權參考價",
+      "category": "CorporateActions",
+      "definition": "除權後的參考股價計算方式。",
+      "aliases": [],
+      "tags": ["參考價", "除權"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "除權參考價 = 前一日收盤價 / (1 + 配股率)",
+      "notes": "配股率以每股送股比例表示（如 10% = 0.1）。未考慮現金增資或其他因素。"
+    },
+    {
+      "id": "ex_rights_dividend_price",
+      "name": "除權息價",
+      "category": "CorporateActions",
+      "definition": "同時除權與除息時的參考價格。",
+      "aliases": ["除權除息參考價"],
+      "tags": ["參考價", "除權息"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "除權息參考價 = (前一日收盤價 - 現金股息) / (1 + 每股送股比例)",
+      "notes": "若同時含現金增資或配股型態不同，需依交易所公告公式調整。"
+    },
+    {
+      "id": "net_profit_margin",
+      "name": "淨利率",
+      "category": "Fundamentals",
+      "definition": "扣除成本、費用與業外損益後，淨利占營收的比例。",
+      "aliases": ["Net Profit Margin"],
+      "tags": ["獲利能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "季報：單季稅後淨利 / 單季營收；年報：全年稅後淨利 / 全年營收",
+      "notes": "不同產業結構差異大，應以同產業比較並重視走勢。"
+    },
+    {
+      "id": "dividend_yield_cash",
+      "name": "現金殖利率",
+      "category": "Fundamentals",
+      "definition": "以現金股利換算的股息報酬率。",
+      "aliases": ["Dividend Yield (Cash)"],
+      "tags": ["股利"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "現金殖利率 = 現金股利 / 股價",
+      "notes": "僅計入現金股利，不含股票股利。股價以評估時點或年度平均價視情況採用。"
+    },
+    {
+      "id": "gross_margin",
+      "name": "毛利率",
+      "category": "Fundamentals",
+      "definition": "銷售扣除銷售成本後的利潤率。",
+      "aliases": ["Gross Margin"],
+      "tags": ["獲利能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "毛利率 = (銷售收入 − 銷售成本) / 銷售收入 × 100%",
+      "notes": "常見作業：依財報期間不同（季/年）計算，注意成本分類的一致性。"
+    },
+    {
+      "id": "eps",
+      "name": "每股盈餘 EPS",
+      "category": "Fundamentals",
+      "definition": "公司於一定期間內分攤至每股的稅後盈餘。",
+      "aliases": ["EPS"],
+      "tags": ["獲利能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "EPS = (稅後淨利 − 特別股股利) / 加權平均流通在外股數",
+      "notes": "若資料僅提供期末股數，可能與加權平均有差異。"
+    },
+    {
+      "id": "roe",
+      "name": "股東權益報酬率 ROE",
+      "category": "Fundamentals",
+      "definition": "衡量股東權益使用效率的指標。",
+      "aliases": ["ROE"],
+      "tags": ["獲利能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "ROE = 稅後淨利 / 平均股東權益",
+      "notes": "平均股東權益通常以 (期初 + 期末) / 2 計。"
+    },
+    {
+      "id": "current_ratio",
+      "name": "流動比率",
+      "category": "Fundamentals",
+      "definition": "衡量短期償債能力的指標。",
+      "aliases": ["Current Ratio"],
+      "tags": ["償債能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "流動比率 = 流動資產 / 流動負債 × 100%",
+      "notes": "高於一定水準通常較安全，但需結合產業特性判讀。"
+    },
+    {
+      "id": "quick_ratio",
+      "name": "速動比率",
+      "category": "Fundamentals",
+      "definition": "排除存貨等變現性較差項目的短期償債能力。",
+      "aliases": ["Quick Ratio"],
+      "tags": ["償債能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "速動比率 = (流動資產 − 存貨 − 其他資產) / 流動負債 × 100%",
+      "notes": "速動資產定義可依公司性質略有差異。"
+    },
+    {
+      "id": "cash_ratio",
+      "name": "現金比率",
+      "category": "Fundamentals",
+      "definition": "以現金類資產衡量的短期償債能力。",
+      "aliases": ["Cash Ratio"],
+      "tags": ["償債能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "現金比率 = 現金類資產 / 流動資產",
+      "notes": "本定義採你提供之口徑；亦有實務將分母設為流動負債。"
+    },
+    {
+      "id": "interest_coverage",
+      "name": "利息保障倍數",
+      "category": "Fundamentals",
+      "definition": "衡量企業償付利息能力。",
+      "aliases": ["Interest Coverage"],
+      "tags": ["償債能力"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "利息保障倍數 = 稅息前利潤 (EBIT) / 利息費用",
+      "notes": "EBIT 可由營業利益加回非營業項目調整，依資料口徑而定。"
+    },
+    {
+      "id": "inventory_turnover",
+      "name": "存貨周轉率",
+      "category": "Fundamentals",
+      "definition": "衡量存貨營運效率。",
+      "aliases": ["Inventory Turnover"],
+      "tags": ["營運效率"],
+      "lang": "zh-TW",
+      "version": 1,
+      "formula": "存貨周轉率 = 銷貨成本 / 存貨平均餘額",
+      "notes": "存貨平均餘額 = (期初存貨 + 期末存貨) / 2。"
+    },
+    {
+      "id": "ex_base_date",
+      "name": "除權息基準日",
+      "category": "CorporateActions",
+      "definition": "確定哪一些股東可參與除權息的名冊基準日。",
+      "aliases": [],
+      "tags": ["日期", "名冊"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "僅名冊在冊者可參與；實際權益仍依交易所與公司公告為準。"
+    },
+    {
+      "id": "book_closure_start",
+      "name": "停止過戶日",
+      "category": "CorporateActions",
+      "definition": "公司整理股東名冊期間的起始日，在該日以後完成交割者不具名冊資格。",
+      "aliases": ["過戶停止起始日"],
+      "tags": ["日期", "名冊"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "配合最後過戶日與基準日使用，須依公司與集中保管機制時間表。"
+    },
+    {
+      "id": "last_transfer_date",
+      "name": "最後過戶日",
+      "category": "CorporateActions",
+      "definition": "具名冊資格的最後交割日（非交易日），須於此日前完成交割方可列名冊。",
+      "aliases": [],
+      "tags": ["日期", "名冊"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "請注意交易日與交割日差異。T+2 或各市場規則不同。"
+    },
+    {
+      "id": "ex_trading_date",
+      "name": "除權息交易日",
+      "category": "CorporateActions",
+      "definition": "股價經除權/除息調整後的首個交易日。",
+      "aliases": [],
+      "tags": ["日期"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "在該日前買進且完成交割者，享有本次權息。"
+    },
+    {
+      "id": "last_buy_in_date",
+      "name": "最遲買進日",
+      "category": "CorporateActions",
+      "definition": "參與本次除權息需在此日前買進並完成交割。",
+      "aliases": [],
+      "tags": ["日期"],
+      "lang": "zh-TW",
+      "version": 1,
+      "notes": "通常為除權息交易日前一交易日，實務仍需考量交割制度。"
+    }
+  ]
+}

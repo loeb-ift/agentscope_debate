@@ -170,6 +170,7 @@ class FinancialTerm(Base):
     term_name = Column(String(200), nullable=False)
     term_category = Column(String(50))
     definition = Column(Text)
+    meta = Column(JSON)  # optional: {aliases, tags, lang, version, formula, notes}
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
