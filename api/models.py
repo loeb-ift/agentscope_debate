@@ -23,16 +23,45 @@ class Agent(Base):
 class Tool(Base):
     """
     工具模型，對應 SDD 6.1 L1 持久化層的 Tool 表。
+    支持 OpenAPI 規範管理。
     """
     __tablename__ = 'tools'
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    type = Column(String, nullable=False)
+    name = Column(String, nullable=False, unique=True)  # e.g., "tej.company_info"
+    type = Column(String, nullable=False)  # "api", "python", "internal"
     json_schema = Column(JSON, nullable=False)
     enabled = Column(Boolean, default=True)
-    api_config = Column(JSON, nullable=True) # URL, method, headers for HTTP tools
-    python_code = Column(Text, nullable=True) # Python code for python tools
+    
+    # API 工具配置（舊字段，保留兼容性）
+    api_config = Column(JSON, nullable=True)  # URL, method, headers for HTTP tools
+    python_code = Column(Text, nullable=True)  # Python code for python tools
     group = Column(String, default="basic")
+    
+    # 新增：OpenAPI 規範支持
+    version = Column(String, default="v1")
+    description = Column(Text, nullable=True)
+    provider = Column(String, nullable=True)  # "tej", "yfinance", "custom"
+    
+    # OpenAPI 3.0 規範（完整 spec）
+    openapi_spec = Column(JSON, nullable=True)
+    
+    # 認證配置
+    auth_type = Column(String, nullable=True)  # "api_key", "oauth2", "basic", "none"
+    auth_config = Column(JSON, nullable=True)  # {"in": "query", "param": "api_key"}
+    
+    # 速率限制
+    rate_limit = Column(JSON, nullable=True)  # {"tps": 5, "burst": 10}
+    
+    # 緩存配置
+    cache_ttl = Column(Integer, default=3600)  # seconds
+    
+    # 其他配置
+    base_url = Column(String, nullable=True)
+    timeout = Column(Integer, default=15)
+    
+    # 元數據（可選，因為舊數據可能沒有這些字段）
+    created_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
 
 class ToolSet(Base):
     """

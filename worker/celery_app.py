@@ -115,3 +115,11 @@ try:
 finally:
     db.close()
 
+# 加載 OpenAPI 規範的動態工具
+print("\n🔄 Loading OpenAPI tools from database...")
+from worker.dynamic_tool_loader import DynamicToolLoader
+try:
+    loaded_count = DynamicToolLoader.load_all_tools(tool_registry)
+    print(f"✅ Successfully loaded {loaded_count} OpenAPI tools\n")
+except Exception as e:
+    print(f"❌ Failed to load OpenAPI tools: {e}\n")

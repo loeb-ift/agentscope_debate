@@ -106,18 +106,61 @@ class ToolTest(BaseModel):
 
 class ToolBase(BaseModel):
     name: str
-    type: str = "http"
+    type: str = "api"  # "api", "python", "internal"
     json_schema: Dict[str, Any]
+    
+    # 舊字段（兼容性）
     api_config: Optional[Dict[str, Any]] = None
     python_code: Optional[str] = None
     group: str = "basic"
     enabled: bool = True
+    
+    # 新增：OpenAPI 規範支持
+    version: str = "v1"
+    description: Optional[str] = None
+    provider: Optional[str] = None  # "tej", "yfinance", "custom"
+    
+    # OpenAPI 3.0 規範
+    openapi_spec: Optional[Dict[str, Any]] = None
+    
+    # 認證配置
+    auth_type: Optional[str] = None  # "api_key", "oauth2", "basic", "none"
+    auth_config: Optional[Dict[str, Any]] = None
+    
+    # 速率限制
+    rate_limit: Optional[Dict[str, Any]] = None
+    
+    # 緩存配置
+    cache_ttl: int = 3600
+    
+    # 其他配置
+    base_url: Optional[str] = None
+    timeout: int = 15
 
 class ToolCreate(ToolBase):
     pass
 
+class ToolUpdate(BaseModel):
+    """更新工具的請求 Schema（所有欄位都是可選的）"""
+    name: Optional[str] = None
+    type: Optional[str] = None
+    json_schema: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+    version: Optional[str] = None
+    description: Optional[str] = None
+    provider: Optional[str] = None
+    openapi_spec: Optional[Dict[str, Any]] = None
+    auth_type: Optional[str] = None
+    auth_config: Optional[Dict[str, Any]] = None
+    rate_limit: Optional[Dict[str, Any]] = None
+    cache_ttl: Optional[int] = None
+    base_url: Optional[str] = None
+    timeout: Optional[int] = None
+
 class Tool(ToolBase):
     id: int
+    created_at: Optional[datetime.datetime] = None
+    updated_at: Optional[datetime.datetime] = None
     
     class Config:
         orm_mode = True
