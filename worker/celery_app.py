@@ -24,6 +24,7 @@ from adapters.tej_adapter import (
     TEJIFRSAccountDescriptions, TEJFinancialCoverCumulative, TEJFinancialSummaryQuarterly,
     TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo, TEJOptionsDailyTrading
 )
+from adapters.web_fetch_adapter import WebFetchAdapter
 from api.tool_registry import tool_registry
 
 load_dotenv()
@@ -37,6 +38,7 @@ app.autodiscover_tasks(['worker'])
 # Browser Use Group
 tool_registry.register(SearXNGAdapter(), group="browser_use")
 tool_registry.register(DuckDuckGoAdapter(), group="browser_use")
+tool_registry.register(WebFetchAdapter(), group="browser_use")
 
 # Financial Data Group
 tool_registry.register(YFinanceAdapter(), group="financial_data")

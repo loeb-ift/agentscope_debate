@@ -49,15 +49,27 @@ class DebateCycle:
         """
         將辯論過程保存為 Markdown 文件。
         """
+        import re
+        from datetime import datetime
+        
         report_dir = "data/replays"
         os.makedirs(report_dir, exist_ok=True)
-        filename = f"{self.debate_id}_{int(datetime.now().timestamp())}.md"
+        
+        # 清理題目，移除非法文件名字符
+        safe_topic = re.sub(r'[<>:"/\\|?*]', '', self.topic)
+        safe_topic = safe_topic.replace(' ', '_')[:50]  # 限制長度
+        
+        # 生成時間戳（可讀格式）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # 組合檔名：題目_時間.md
+        filename = f"{safe_topic}_{timestamp}.md"
         filepath = os.path.join(report_dir, filename)
         
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"# 辯論報告：{self.topic}\n\n")
             f.write(f"**ID**: {self.debate_id}\n")
-            f.write(f"**Date**: {CURRENT_DATE}\n\n")
+            f.write(f"**Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             f.write("## 🏆 最終結論\n\n")
             f.write(f"{conclusion}\n\n")
@@ -98,9 +110,19 @@ class DebateCycle:
         
         # 1. Agent 動態選擇工具 (Initialization Phase)
         print("Agents are selecting their tools...")
+        self._publish_log("System", "🎯 辯論準備階段：各 Agent 正在選擇最適合的工具...")
+        
+        total_agents = sum(len(team['agents']) for team in self.teams)
+        current_agent = 0
+        
         for team in self.teams:
             side = team.get('side', 'neutral')
+            team_name = team.get('name', 'Unknown Team')
+            self._publish_log("System", f"📋 {team_name} 成員正在準備...")
+            
             for agent in team['agents']:
+                current_agent += 1
+                self._publish_log(f"{agent.name} (Preparing)", f"正在分析辯題並選擇工具... ({current_agent}/{total_agents})")
                 self._agent_select_tools(agent, side)
         
         for i in range(1, self.rounds + 1):
@@ -170,6 +192,8 @@ class DebateCycle:
             user_prompt = f"""
 請根據以下完整的辯論記錄，生成「最終評估報告」。
 
+**重要：請使用繁體中文撰寫評估報告。**
+
 辯題：{self.topic}
 
 辯論記錄：
@@ -207,18 +231,27 @@ class DebateCycle:
         # 2. 各團隊內部辯論與總結 (Intra-Team Debate & Summary)
         round_team_summaries = {}
         
-        for team in self.teams:
+        total_teams = len(self.teams)
+        for team_idx, team in enumerate(self.teams, 1):
             team_name = team['name']
             team_side = team.get('side', 'neutral')
             team_agents = team['agents']
             
             print(f"--- Team {team_name} is deliberating ---")
-            self._publish_log("System", f"--- Team {team_name} 正在進行內部討論 ---")
+            
+            # 團隊討論開始提示
+            team_icon = "🟦" if team_side == "pro" else "🟥" if team_side == "con" else "🟩"
+            self._publish_log("System", f"{team_icon} 【{team_name}】開始內部討論 ({team_idx}/{total_teams})")
             
             team_discussion_log = []
             
             # 每個 Agent 輪流發言 (模擬內部討論)
-            for agent in team_agents:
+            total_agents_in_team = len(team_agents)
+            for agent_idx, agent in enumerate(team_agents, 1):
+                # 發言前提示
+                self._publish_log(f"{team_name} - {agent.name} (Preparing)", 
+                                f"💬 {agent.name} 準備發言... ({agent_idx}/{total_agents_in_team})")
+                
                 content = self._agent_turn(agent, team_name, round_num)
                 role_label = f"{team_name} - {agent.name}"
                 self.history.append({"role": role_label, "content": content})
@@ -227,6 +260,7 @@ class DebateCycle:
                 team_discussion_log.append(f"{agent.name}: {content}")
             
             # 生成團隊共識與分歧總結
+            self._publish_log("System", f"📊 {team_name} 正在整理團隊共識...")
             team_summary = self._generate_team_summary(team_name, team_discussion_log)
             self._publish_log(f"{team_name} (Summary)", team_summary)
             round_team_summaries[team_name] = team_summary
@@ -336,13 +370,18 @@ class DebateCycle:
                 selected_tools = json.loads(json_match.group(0))
                 self.agent_tools_map[agent.name] = selected_tools
                 print(f"Agent {agent.name} selected tools: {selected_tools}")
-                self._publish_log(f"{agent.name} (Setup)", f"Selected tools: {selected_tools}")
+                
+                # 格式化工具列表顯示
+                tools_display = "\n".join([f"  • {tool}" for tool in selected_tools])
+                self._publish_log(f"{agent.name} (Setup)", f"✅ 已選擇 {len(selected_tools)} 個工具：\n{tools_display}")
             else:
                 print(f"Agent {agent.name} failed to select tools (no JSON), using defaults.")
                 self.agent_tools_map[agent.name] = []
+                self._publish_log(f"{agent.name} (Setup)", "⚠️ 工具選擇失敗，將使用默認配置")
         except Exception as e:
             print(f"Error in tool selection for {agent.name}: {e}")
             self.agent_tools_map[agent.name] = []
+            self._publish_log(f"{agent.name} (Setup)", f"❌ 工具選擇錯誤: {str(e)}")
 
     def _compress_history(self):
         """

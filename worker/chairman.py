@@ -152,23 +152,23 @@ class Chairman(AgentBase):
                 raise ValueError("No JSON object found in response")
             
             # 為了兼容舊代碼，將 step6_handcard 映射為 step5_summary (因為 debate_cycle.py 使用此 key)
-                if "step6_handcard" in analysis_result:
-                    analysis_result["step5_summary"] = analysis_result["step6_handcard"]
-                elif analysis_result.get("step5_summary") is None: # Only if neither handcard nor summary exists
-                    # 嘗試從其他欄位構建摘要
-                    summary_parts = []
-                    if "step1_type" in analysis_result:
-                        summary_parts.append(f"題型：{analysis_result['step1_type']}")
-                    if "step2_elements" in analysis_result:
-                        summary_parts.append(f"關鍵要素：{analysis_result['step2_elements']}")
-                    if "step5_research_strategy" in analysis_result:
-                        summary_parts.append(f"資料蒐集戰略：{analysis_result['step5_research_strategy']}")
-                    
-                    if summary_parts:
-                        analysis_result["step5_summary"] = "\n".join(summary_parts)
-                    else:
-                        print(f"WARNING: LLM Analysis JSON missing key fields. Keys found: {list(analysis_result.keys())}")
-                        analysis_result["step5_summary"] = f"分析完成，但在提取摘要時遇到問題。完整回應如下：\n{json.dumps(analysis_result, ensure_ascii=False, indent=2)}"
+            if "step6_handcard" in analysis_result:
+                analysis_result["step5_summary"] = analysis_result["step6_handcard"]
+            elif analysis_result.get("step5_summary") is None: # Only if neither handcard nor summary exists
+                # 嘗試從其他欄位構建摘要
+                summary_parts = []
+                if "step1_type" in analysis_result:
+                    summary_parts.append(f"題型：{analysis_result['step1_type']}")
+                if "step2_elements" in analysis_result:
+                    summary_parts.append(f"關鍵要素：{analysis_result['step2_elements']}")
+                if "step5_research_strategy" in analysis_result:
+                    summary_parts.append(f"資料蒐集戰略：{analysis_result['step5_research_strategy']}")
+                
+                if summary_parts:
+                    analysis_result["step5_summary"] = "\n".join(summary_parts)
+                else:
+                    print(f"WARNING: LLM Analysis JSON missing key fields. Keys found: {list(analysis_result.keys())}")
+                    analysis_result["step5_summary"] = f"分析完成，但在提取摘要時遇到問題。完整回應如下：\n{json.dumps(analysis_result, ensure_ascii=False, indent=2)}"
 
         except Exception as e:
             print(f"Error parsing analysis result: {e}. Raw response: {response}")
@@ -184,6 +184,12 @@ class Chairman(AgentBase):
                 "step5_summary": response if response else "分析失敗，無法生成摘要。" # 兼容性
             }
 
+        # Debug: 確認 step5_summary 存在
+        print(f"DEBUG: analysis_result keys: {list(analysis_result.keys())}")
+        summary_value = analysis_result.get('step5_summary', 'KEY_NOT_FOUND')
+        summary_preview = str(summary_value)[:200] if summary_value else "EMPTY"
+        print(f"DEBUG: step5_summary value: {summary_preview}")
+        
         print(f"Pre-debate analysis completed.")
         return analysis_result
 

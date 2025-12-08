@@ -8,6 +8,95 @@ import os
 
 API_URL = os.getenv("API_URL", "http://api:8000/api/v1")
 
+# --- Global Cache for Core Data ---
+_CORE_DATA_CACHE = {
+    "agents": {"data": None, "timestamp": 0},
+    "teams": {"data": None, "timestamp": 0},
+    "toolsets": {"data": None, "timestamp": 0},
+    "securities": {"data": None, "timestamp": 0},
+    "financial_terms": {"data": None, "timestamp": 0}
+}
+CACHE_TTL = 60  # 60 seconds cache (increased from 30)
+
+def _get_cached_or_fetch(cache_key, fetch_url, timeout=15):
+    """通用緩存獲取函數"""
+    import time
+    now = time.time()
+    cache = _CORE_DATA_CACHE.get(cache_key)
+    
+    # 如果緩存有效，直接返回
+    if cache and cache["data"] is not None and (now - cache["timestamp"]) < CACHE_TTL:
+        print(f"DEBUG: Using cached {cache_key}", flush=True)
+        return cache["data"]
+    
+    # 如果有舊緩存且距離上次失敗不到 10 秒，直接使用舊緩存避免頻繁重試
+    if cache and cache["data"] is not None and (now - cache.get("last_error_time", 0)) < 10:
+        print(f"DEBUG: Using stale cache for {cache_key} (recent error)", flush=True)
+        return cache["data"]
+    
+    # 否則重新獲取
+    try:
+        print(f"DEBUG: Fetching fresh {cache_key} from API...", flush=True)
+        response = requests.get(fetch_url, timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+        
+        # 更新緩存
+        _CORE_DATA_CACHE[cache_key] = {"data": data, "timestamp": now, "last_error_time": 0}
+        return data
+    except Exception as e:
+        print(f"ERROR fetching {cache_key}: {e}", flush=True)
+        # 記錄錯誤時間
+        if cache:
+            cache["last_error_time"] = now
+        # 如果有舊緩存，即使過期也返回
+        if cache and cache["data"] is not None:
+            print(f"WARNING: Using stale cache for {cache_key}", flush=True)
+            return cache["data"]
+        return None
+
+def preload_core_data():
+    """預加載核心數據（Agents、Teams、Toolsets、Securities、Financial Terms）"""
+    import time
+    
+    # Wait for API to be ready
+    max_retries = 10
+    retry_delay = 2
+    
+    print("⏳ Waiting for API service to be ready...", flush=True)
+    for attempt in range(max_retries):
+        try:
+            health_check = requests.get(f"{API_URL.rsplit('/api/v1', 1)[0]}/health", timeout=2)
+            if health_check.status_code == 200:
+                print("✅ API service is ready!", flush=True)
+                break
+        except:
+            pass
+        
+        if attempt < max_retries - 1:
+            print(f"   Retry {attempt + 1}/{max_retries} in {retry_delay}s...", flush=True)
+            time.sleep(retry_delay)
+    else:
+        print("⚠️  API service not ready, skipping preload (will load on demand)", flush=True)
+        return
+    
+    # Now preload data
+    print("🚀 Preloading core data...", flush=True)
+    agents_data = _get_cached_or_fetch("agents", f"{API_URL}/agents", timeout=15)
+    teams_data = _get_cached_or_fetch("teams", f"{API_URL}/teams", timeout=15)
+    toolsets_data = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets", timeout=15)
+    securities_data = _get_cached_or_fetch("securities", f"{API_URL}/internal/securities", timeout=15)
+    terms_data = _get_cached_or_fetch("financial_terms", f"{API_URL}/internal/financial_terms", timeout=15)
+    
+    loaded_count = sum(1 for d in [agents_data, teams_data, toolsets_data, securities_data, terms_data] if d)
+    
+    if loaded_count >= 2:  # At least agents and teams
+        agents_count = len(agents_data.get('items', agents_data) if isinstance(agents_data, dict) else agents_data) if agents_data else 0
+        teams_count = len(teams_data.get('items', teams_data) if isinstance(teams_data, dict) else teams_data) if teams_data else 0
+        print(f"✅ Core data preloaded: {agents_count} agents, {teams_count} teams, {loaded_count}/5 datasets", flush=True)
+    else:
+        print("⚠️  Partial preload (will retry on demand)", flush=True)
+
 # --- Helper Functions ---
 
 def extract_id_from_dropdown(value):
@@ -19,22 +108,21 @@ def extract_id_from_dropdown(value):
     return value
 
 def get_agents(role=None):
-    try:
-        params = {"role": role} if role else {}
-        response = requests.get(f"{API_URL}/agents", params=params, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        print(f"DEBUG: get_agents role={role}, type(data)={type(data)}")
-        if isinstance(data, dict):
-             items = data.get("items", [])
-             print(f"DEBUG: data is dict. keys={list(data.keys())}. items type={type(items)}")
-             return items
-        else:
-             print(f"DEBUG: data is not dict. Returning data directly.")
-             return data
-    except Exception as e:
-        print(f"Error fetching agents: {e}")
+    data = _get_cached_or_fetch("agents", f"{API_URL}/agents")
+    if not data:
         return []
+    
+    print(f"DEBUG: get_agents role={role}, type(data)={type(data)}")
+    if isinstance(data, dict):
+        items = data.get("items", [])
+        print(f"DEBUG: data is dict. keys={list(data.keys())}. items type={type(items)}")
+        # Filter by role if specified
+        if role:
+            items = [a for a in items if a.get("role") == role]
+        return items
+    else:
+        print(f"DEBUG: data is not dict. Returning data directly.")
+        return data if not role else [a for a in data if a.get("role") == role]
 
 def create_agent(name, role, specialty, system_prompt, config_json_str):
     try:
@@ -345,9 +433,9 @@ def create_company(company_id, company_name, ticker, sector, market_cap):
 
 def list_securities():
     try:
-        response = requests.get(f"{API_URL}/internal/securities")
-        response.raise_for_status()
-        securities = response.json()
+        securities = _get_cached_or_fetch("securities", f"{API_URL}/internal/securities")
+        if not securities:
+            return pd.DataFrame(columns=["ID", "Name", "Ticker", "Type", "Issuer ID"])
         
         data = []
         for s in securities:
@@ -399,9 +487,9 @@ def get_replay_download_link(filename):
 
 def list_financial_terms():
     try:
-        response = requests.get(f"{API_URL}/internal/financial_terms")
-        response.raise_for_status()
-        terms = response.json()
+        terms = _get_cached_or_fetch("financial_terms", f"{API_URL}/internal/financial_terms")
+        if not terms:
+            return pd.DataFrame(columns=["ID", "Name (ZH)", "Definition (EN)", "Category"])
         
         data = []
         for t in terms:
@@ -429,9 +517,10 @@ def update_financial_term(term_id, name, definition, category):
 
 def list_toolsets():
     try:
-        response = requests.get(f"{API_URL}/toolsets")
-        response.raise_for_status()
-        toolsets = response.json()
+        toolsets = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets")
+        if not toolsets:
+            return pd.DataFrame(columns=["ID", "名稱", "描述", "包含工具", "全局啟用"])
+        
         data = []
         for ts in toolsets:
             tool_names_str = ", ".join(ts.get('tool_names', []))
@@ -580,18 +669,14 @@ def delete_team(team_id):
         return f"刪除失敗: {e}"
 
 def get_team_choices():
-    try:
-        print("DEBUG: Fetching teams for dropdown...", flush=True)
-        response = requests.get(f"{API_URL}/teams", timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        teams = data.get("items", []) if isinstance(data, dict) else data
-        print(f"DEBUG: Found {len(teams)} teams.", flush=True)
-        choices = [(f"{t['name']} ({t['id']})", t['id']) for t in teams]
-        return choices
-    except Exception as e:
-        print(f"ERROR: Failed to get team choices: {e}", flush=True)
+    data = _get_cached_or_fetch("teams", f"{API_URL}/teams")
+    if not data:
         return []
+    
+    teams = data.get("items", []) if isinstance(data, dict) else data
+    print(f"DEBUG: Found {len(teams)} teams (from cache).", flush=True)
+    choices = [(f"{t['name']} ({t['id']})", t['id']) for t in teams]
+    return choices
 
 # --- UI Construction ---
 
@@ -659,24 +744,35 @@ def main():
                                 live_log = gr.Markdown(label="辯論日誌串流", value="等待啟動...", height=600)
 
                         # --- Wizard Logic ---
+                        _dropdown_cache = {"timestamp": 0, "data": None}
+                        
                         def refresh_dropdowns():
-                            print("DEBUG: Refreshing dropdowns...", flush=True)
-                            chairmen = get_agent_choices() # Allow any agent to be Chairman
+                            import time
+                            # Cache for 3 seconds to avoid excessive API calls
+                            now = time.time()
+                            if _dropdown_cache["data"] and (now - _dropdown_cache["timestamp"]) < 3:
+                                return _dropdown_cache["data"]
+                            
+                            chairmen = get_agent_choices()
                             teams = get_team_choices()
-                            return (
+                            result = (
                                 gr.update(choices=chairmen),
                                 gr.update(choices=teams),
                                 gr.update(choices=teams),
                                 gr.update(choices=teams)
                             )
+                            _dropdown_cache["data"] = result
+                            _dropdown_cache["timestamp"] = now
+                            return result
                         
                         def refresh_teams_only(chairman_val, team_a_val, team_b_val, team_c_val):
                             try:
                                 print(f"DEBUG: Refreshing teams. Chairman: {chairman_val}", flush=True)
-                                # 1. Fetch all teams
-                                response = requests.get(f"{API_URL}/teams", timeout=20)
-                                response.raise_for_status()
-                                data = response.json()
+                                # 1. Fetch all teams (use cache)
+                                data = _get_cached_or_fetch("teams", f"{API_URL}/teams")
+                                if not data:
+                                    return (gr.update(), gr.update(), gr.update(), gr.update(visible=False))
+                                
                                 all_teams = data.get("items", []) if isinstance(data, dict) else data
                                 
                                 # 2. Filter based on Chairman
@@ -777,7 +873,6 @@ def main():
                         team_outputs = [pro_team_dropdown, con_team_dropdown, neutral_team_dropdown, team_warning_msg]
 
                         refresh_teams_btn.click(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
-                        step1_next_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
                         
                         # Auto-refresh and filter when any related dropdown changes
                         chairman_dropdown.change(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
@@ -1370,5 +1465,9 @@ def main():
     return demo
 
 if __name__ == "__main__":
+    # Preload core data before starting the app
+    preload_core_data()
+    
     demo = main()
     demo.queue().launch(server_name="0.0.0.0", server_port=7860)
+

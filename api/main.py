@@ -33,46 +33,7 @@ from adapters.tej_adapter import (
     TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo, TEJOptionsDailyTrading
 )
 
-# 初始化資料庫
-init_db()
-
-# 執行系統初始化 (Prompt, ToolSet, Default Agents)
-db = SessionLocal()
-try:
-    initialize_all(db)
-finally:
-    db.close()
-
-# 註冊工具
-tool_registry.register(SearXNGAdapter())
-tool_registry.register(DuckDuckGoAdapter())
-tool_registry.register(YFinanceAdapter())
-tool_registry.register(TEJCompanyInfo())
-tool_registry.register(TEJStockPrice())
-tool_registry.register(TEJMonthlyRevenue())
-tool_registry.register(TEJInstitutionalHoldings())
-tool_registry.register(TEJMarginTrading())
-tool_registry.register(TEJForeignHoldings())
-tool_registry.register(TEJFinancialSummary())
-tool_registry.register(TEJFundNAV())
-tool_registry.register(TEJShareholderMeeting())
-tool_registry.register(TEJFundBasicInfo())
-tool_registry.register(TEJOffshoreFundInfo())
-tool_registry.register(TEJOffshoreFundDividend())
-tool_registry.register(TEJOffshoreFundHoldingsRegion())
-tool_registry.register(TEJOffshoreFundHoldingsIndustry())
-tool_registry.register(TEJOffshoreFundNAVRank())
-tool_registry.register(TEJOffshoreFundNAVDaily())
-tool_registry.register(TEJOffshoreFundSuspension())
-tool_registry.register(TEJOffshoreFundPerformance())
-tool_registry.register(TEJIFRSAccountDescriptions())
-tool_registry.register(TEJFinancialCoverCumulative())
-tool_registry.register(TEJFinancialSummaryQuarterly())
-tool_registry.register(TEJFinancialCoverQuarterly())
-tool_registry.register(TEJFuturesData())
-tool_registry.register(TEJOptionsBasicInfo())
-tool_registry.register(TEJOptionsDailyTrading())
-
+# FastAPI app 先創建
 app = FastAPI()
 
 # Configure CORS
@@ -88,8 +49,6 @@ app.add_middleware(
 redis_host = os.getenv('REDIS_HOST', 'localhost')
 redis_client = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
 
-
-
 # Dependency
 def get_db():
     """
@@ -100,6 +59,54 @@ def get_db():
         yield db
     finally:
         db.close()
+
+@app.on_event("startup")
+async def startup_event():
+    """在 API 服務啟動時執行初始化"""
+    print("🚀 Starting API initialization...")
+    
+    # 初始化資料庫
+    init_db()
+    
+    # 執行系統初始化 (Prompt, ToolSet, Default Agents)
+    db = SessionLocal()
+    try:
+        initialize_all(db)
+    finally:
+        db.close()
+    
+    # 註冊工具
+    print("📦 Registering tools...")
+    tool_registry.register(SearXNGAdapter())
+    tool_registry.register(DuckDuckGoAdapter())
+    tool_registry.register(YFinanceAdapter())
+    tool_registry.register(TEJCompanyInfo())
+    tool_registry.register(TEJStockPrice())
+    tool_registry.register(TEJMonthlyRevenue())
+    tool_registry.register(TEJInstitutionalHoldings())
+    tool_registry.register(TEJMarginTrading())
+    tool_registry.register(TEJForeignHoldings())
+    tool_registry.register(TEJFinancialSummary())
+    tool_registry.register(TEJFundNAV())
+    tool_registry.register(TEJShareholderMeeting())
+    tool_registry.register(TEJFundBasicInfo())
+    tool_registry.register(TEJOffshoreFundInfo())
+    tool_registry.register(TEJOffshoreFundDividend())
+    tool_registry.register(TEJOffshoreFundHoldingsRegion())
+    tool_registry.register(TEJOffshoreFundHoldingsIndustry())
+    tool_registry.register(TEJOffshoreFundNAVRank())
+    tool_registry.register(TEJOffshoreFundNAVDaily())
+    tool_registry.register(TEJOffshoreFundSuspension())
+    tool_registry.register(TEJOffshoreFundPerformance())
+    tool_registry.register(TEJIFRSAccountDescriptions())
+    tool_registry.register(TEJFinancialCoverCumulative())
+    tool_registry.register(TEJFinancialSummaryQuarterly())
+    tool_registry.register(TEJFinancialCoverQuarterly())
+    tool_registry.register(TEJFuturesData())
+    tool_registry.register(TEJOptionsBasicInfo())
+    tool_registry.register(TEJOptionsDailyTrading())
+    
+    print("✅ API initialization complete!")
 
 # --- Include Routers ---
 from api.agent_routes import router as agent_router
@@ -115,6 +122,12 @@ app.include_router(prompt_router)
 app.include_router(tool_router)
 app.include_router(internal_router)
 app.include_router(toolset_router)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """健康檢查端點，用於確認服務已就緒"""
+    return {"status": "healthy", "service": "debate-api"}
 
 # --- Debates API ---
 
