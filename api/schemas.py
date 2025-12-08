@@ -33,6 +33,9 @@ class Agent(AgentBase):
     class Config:
         orm_mode = True  # Pydantic v1 compatibility
 
+class AgentList(BaseModel):
+    items: List[Agent]
+
 # --- Team Schemas ---
 
 class TeamBase(BaseModel):
@@ -55,6 +58,9 @@ class Team(TeamBase):
 
     class Config:
         orm_mode = True
+
+class TeamList(BaseModel):
+    items: List[Team]
 
 # --- Debate Schemas ---
 

@@ -2,7 +2,7 @@
 ToolSet API 端點
 """
 
-from fastapi import Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from api import models
@@ -14,6 +14,8 @@ from api.toolset_schemas import (
 from api.toolset_service import ToolSetService
 from api.database import SessionLocal
 
+router = APIRouter()
+
 def get_db():
     db = SessionLocal()
     try:
@@ -23,6 +25,7 @@ def get_db():
 
 # --- ToolSet CRUD API ---
 
+@router.post("/api/v1/toolsets", response_model=ToolSet, status_code=201)
 def create_toolset_endpoint(toolset: ToolSetCreate, db: Session = Depends(get_db)):
     """
     創建新的工具集。
@@ -41,6 +44,7 @@ def create_toolset_endpoint(toolset: ToolSetCreate, db: Session = Depends(get_db
     
     return db_toolset
 
+@router.get("/api/v1/toolsets", response_model=List[ToolSet])
 def list_toolsets_endpoint(
     skip: int = 0,
     limit: int = 100,
@@ -60,6 +64,7 @@ def list_toolsets_endpoint(
     toolsets = query.offset(skip).limit(limit).all()
     return toolsets
 
+@router.get("/api/v1/toolsets/{toolset_id}")
 def get_toolset_endpoint(toolset_id: str, db: Session = Depends(get_db)):
     """
     獲取工具集詳情（包含工具列表）。
@@ -72,6 +77,7 @@ def get_toolset_endpoint(toolset_id: str, db: Session = Depends(get_db)):
     
     return toolset_details
 
+@router.put("/api/v1/toolsets/{toolset_id}", response_model=ToolSet)
 def update_toolset_endpoint(
     toolset_id: str,
     toolset_update: ToolSetUpdate,
@@ -98,6 +104,7 @@ def update_toolset_endpoint(
     
     return db_toolset
 
+@router.delete("/api/v1/toolsets/{toolset_id}", status_code=204)
 def delete_toolset_endpoint(toolset_id: str, db: Session = Depends(get_db)):
     """
     刪除工具集。
@@ -129,6 +136,7 @@ def delete_toolset_endpoint(toolset_id: str, db: Session = Depends(get_db)):
 
 # --- Agent-ToolSet Association API ---
 
+@router.post("/api/v1/agents/{agent_id}/toolsets", response_model=AgentToolSetResponse, status_code=201)
 def assign_toolset_to_agent_endpoint(
     agent_id: str,
     assignment: AgentToolSetAssign,
@@ -174,6 +182,7 @@ def assign_toolset_to_agent_endpoint(
     
     return db_assignment
 
+@router.get("/api/v1/agents/{agent_id}/toolsets")
 def get_agent_toolsets_endpoint(agent_id: str, db: Session = Depends(get_db)):
     """
     獲取 Agent 的所有工具集。
@@ -222,6 +231,7 @@ def get_agent_toolsets_endpoint(agent_id: str, db: Session = Depends(get_db)):
         "toolsets": assigned_toolsets
     }
 
+@router.get("/api/v1/agents/{agent_id}/available-tools")
 def get_agent_available_tools_endpoint(agent_id: str, db: Session = Depends(get_db)):
     """
     獲取 Agent 可用的所有工具。
@@ -234,6 +244,7 @@ def get_agent_available_tools_endpoint(agent_id: str, db: Session = Depends(get_
     tools = ToolSetService.get_agent_available_tools(db, agent_id)
     return tools
 
+@router.delete("/api/v1/agents/{agent_id}/toolsets/{toolset_id}", status_code=204)
 def remove_toolset_from_agent_endpoint(
     agent_id: str,
     toolset_id: str,
@@ -258,6 +269,7 @@ def remove_toolset_from_agent_endpoint(
 
 # --- Initialization ---
 
+@router.post("/api/v1/toolsets/initialize-global")
 def initialize_global_toolset_endpoint(db: Session = Depends(get_db)):
     """
     初始化全局工具集。

@@ -24,6 +24,13 @@ class TEJBaseAdapter(ToolAdapter):
         self.auth_config = {"type": "api_key", "in": "query", "param": "api_key"}
         self.rate_limit_config = {"tps": 5, "burst": 10}
         self.cache_ttl = 6 * 60 * 60  # 6 hours
+    def _flatten_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Helper to flatten nested tool parameters from Agent hallucinations."""
+        if "params" in params and isinstance(params["params"], dict) and "tool" in params:
+             print(f"DEBUG: Auto-correcting nested params: {params['params']}")
+             params.update(params["params"])
+        return params
+
 
     def auth(self, req: Dict[str, Any]) -> Dict[str, Any]:
         token = self.api_key
@@ -47,6 +54,11 @@ class TEJBaseAdapter(ToolAdapter):
         return f"{self.base_url}/{db}/{table}.json"
 
     def _execute_query(self, db: str, table: str, params: Dict[str, Any], filters: Optional[Dict[str, Any]] = None) -> ToolResult:
+        # Hotfix for nested parameters from potential Agent hallucination
+        if "params" in params and isinstance(params["params"], dict) and "tool" in params:
+             print(f"DEBUG: Auto-correcting nested params for {table}: {params['params']}")
+             params.update(params["params"])
+
         url = self._build_url(db, table)
         query: Dict[str, Any] = {}
         
@@ -64,6 +76,8 @@ class TEJBaseAdapter(ToolAdapter):
             for k, v in filters.items():
                 if v is not None:
                     query[k] = v
+                elif k in params:
+                    query[k] = params[k]
                 
         # Handle date range if provided in params but not in filters
         if "start_date" in params and "mdate.gte" not in query:
@@ -151,10 +165,12 @@ class TEJCompanyInfo(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
+
         coid = kwargs.get("coid")
         if not coid:
             raise ValueError("coid is required")
-        return self._execute_query("TRAIL", "AIND", filters={"coid": coid})
+        return self._execute_query("TRAIL", "AIND", params=kwargs, filters={"coid": coid})
 
 class TEJStockPrice(TEJBaseAdapter):
     name = "tej.stock_price"
@@ -177,6 +193,7 @@ class TEJStockPrice(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAPRCD", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJMonthlyRevenue(TEJBaseAdapter):
@@ -199,6 +216,7 @@ class TEJMonthlyRevenue(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TASALE", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJInstitutionalHoldings(TEJBaseAdapter):
@@ -223,6 +241,7 @@ class TEJInstitutionalHoldings(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TATINST1", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJMarginTrading(TEJBaseAdapter):
@@ -246,6 +265,7 @@ class TEJMarginTrading(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAGIN", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJForeignHoldings(TEJBaseAdapter):
@@ -268,6 +288,7 @@ class TEJForeignHoldings(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAQFII", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialSummary(TEJBaseAdapter):
@@ -292,6 +313,7 @@ class TEJFinancialSummary(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAIM1A", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFundNAV(TEJBaseAdapter):
@@ -314,6 +336,7 @@ class TEJFundNAV(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TANAV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJShareholderMeeting(TEJBaseAdapter):
@@ -337,6 +360,7 @@ class TEJShareholderMeeting(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAMT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFundBasicInfo(TEJBaseAdapter):
@@ -357,6 +381,7 @@ class TEJFundBasicInfo(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAATT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundInfo(TEJBaseAdapter):
@@ -375,6 +400,7 @@ class TEJOffshoreFundInfo(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFATT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundDividend(TEJBaseAdapter):
@@ -395,6 +421,7 @@ class TEJOffshoreFundDividend(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFCAN", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
@@ -415,6 +442,7 @@ class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFIVA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
@@ -435,6 +463,7 @@ class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFIVP", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundNAVRank(TEJBaseAdapter):
@@ -455,6 +484,7 @@ class TEJOffshoreFundNAVRank(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFMNV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
@@ -475,6 +505,7 @@ class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFNAV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundSuspension(TEJBaseAdapter):
@@ -495,6 +526,7 @@ class TEJOffshoreFundSuspension(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFSUSP", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundPerformance(TEJBaseAdapter):
@@ -515,6 +547,7 @@ class TEJOffshoreFundPerformance(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOFUNDS", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJIFRSAccountDescriptions(TEJBaseAdapter):
@@ -533,6 +566,7 @@ class TEJIFRSAccountDescriptions(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         filters = {}
         if kwargs.get("code"):
             filters["code"] = kwargs.get("code")
@@ -556,6 +590,7 @@ class TEJFinancialCoverCumulative(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAIM1AA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
@@ -579,6 +614,7 @@ class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAIM1AQ", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialCoverQuarterly(TEJBaseAdapter):
@@ -599,6 +635,7 @@ class TEJFinancialCoverQuarterly(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAIM1AQA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFuturesData(TEJBaseAdapter):
@@ -622,6 +659,7 @@ class TEJFuturesData(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAFUTR", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOptionsBasicInfo(TEJBaseAdapter):
@@ -640,6 +678,7 @@ class TEJOptionsBasicInfo(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOPBAS", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOptionsDailyTrading(TEJBaseAdapter):
@@ -660,5 +699,6 @@ class TEJOptionsDailyTrading(TEJBaseAdapter):
         }
 
     def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOPTION", params=kwargs, filters={"coid": kwargs.get("coid")})
 

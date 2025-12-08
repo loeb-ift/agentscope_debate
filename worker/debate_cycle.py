@@ -26,7 +26,8 @@ class DebateCycle:
         self.chairman = chairman
         self.teams = teams # List of dicts: [{"name": "...", "side": "...", "agents": [AgentBase...]}]
         self.rounds = rounds
-        self.redis_client = redis.Redis(host='redis', port=6379, db=0)
+        redis_host = os.getenv('REDIS_HOST', 'redis')
+        self.redis_client = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
         self.evidence_key = f"debate:{self.debate_id}:evidence"
         self.rounds_data = []
         self.analysis_result = {}
@@ -405,6 +406,7 @@ class DebateCycle:
         執行單個 Agent 的回合：思考 -> 工具 -> 發言
         """
         print(f"Agent {agent.name} ({side}) is thinking...")
+        self._publish_log(f"{agent.name} (Thinking)", f"{agent.name} 正在思考並決定使用的策略...")
         
         # 構建 Prompt - 使用 Agent 自己選擇的工具
         selected_tool_names = self.agent_tools_map.get(agent.name, [])
@@ -448,7 +450,8 @@ class DebateCycle:
 2. **精準調用**：請仔細閱讀所有可用工具的 **Schema** (欄位說明)，選擇最能提供你所需數據的工具。對於金融數據，務必確認工具包含你需要的特定指標。
 3. **時間因子**：如果工具包含時間參數（如 start_date, end_date, mdate），請務必根據問題中的時間描述（如「近一年」、「2024 Q1」）計算並填入準確的日期範圍，不要省略。
 4. 工具調用格式必須是純 JSON，不要有其他文字
-5. 調用工具後，你會收到數據，然後基於數據發言
+5. **TEJ 工具參數**： 若使用 `tej` 開頭的工具，`coid` 參數 (公司代碼) 是**必填**的。請務必查看問題中提供的【重要常數】，將公司名稱（如台積電）轉換為對應的代碼（如 2330）。
+6. 調用工具後，你會收到數據，然後基於數據發言
 """
             sys_template = PromptService.get_prompt(db, "debater.system_instruction", default=default_system)
             system_prompt = sys_template.format(agent_name=agent.name, side=side, topic=self.topic)
@@ -554,6 +557,7 @@ class DebateCycle:
                         tool_result = tasks.execute_tool(tool_name, params)
                         print(f"✓ Tool execution successful")
                         print(f"DEBUG: Tool result preview: {str(tool_result)[:300]}...")
+                        self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功獲取數據。")
                         
                         # Record successful tool usage to Tool LTM
                         with ReMeToolLongTermMemory() as tool_mem:

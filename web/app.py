@@ -4,8 +4,9 @@ import json
 import sseclient
 import pandas as pd
 import time
+import os
 
-API_URL = "http://api:8000/api/v1"
+API_URL = os.getenv("API_URL", "http://api:8000/api/v1")
 
 # --- Helper Functions ---
 
@@ -20,9 +21,17 @@ def extract_id_from_dropdown(value):
 def get_agents(role=None):
     try:
         params = {"role": role} if role else {}
-        response = requests.get(f"{API_URL}/agents", params=params)
+        response = requests.get(f"{API_URL}/agents", params=params, timeout=20)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        print(f"DEBUG: get_agents role={role}, type(data)={type(data)}")
+        if isinstance(data, dict):
+             items = data.get("items", [])
+             print(f"DEBUG: data is dict. keys={list(data.keys())}. items type={type(items)}")
+             return items
+        else:
+             print(f"DEBUG: data is not dict. Returning data directly.")
+             return data
     except Exception as e:
         print(f"Error fetching agents: {e}")
         return []
@@ -70,7 +79,22 @@ def delete_agent(agent_id):
 
 def get_agent_choices(role=None):
     agents = get_agents(role)
-    return [(f"{a['name']} ({a['role']})", a['id']) for a in agents]
+    print(f"DEBUG: get_agent_choices role={role}, agents type={type(agents)}", flush=True)
+    if not isinstance(agents, list):
+        print(f"ERROR: agents is not a list! Value: {agents}", flush=True)
+        return []
+    
+    choices = []
+    for a in agents:
+        if not isinstance(a, dict):
+            print(f"ERROR: Agent item is not dict: {a} (type: {type(a)})", flush=True)
+            continue
+        try:
+            choices.append((f"{a.get('name', 'Unknown')} ({a.get('role', 'Unknown')})", a.get('id', '')))
+        except Exception as e:
+            print(f"ERROR processing agent: {a} - {e}", flush=True)
+            
+    return choices
 
 def format_agent_list():
     agents = get_agents()
@@ -128,42 +152,71 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         launch_res = requests.post(f"{API_URL}/debates/launch?config_id={config_id}")
         launch_res.raise_for_status()
         
-        return f"辯論已啟動！任務 ID: {launch_res.json()['task_id']}", launch_res.json()['task_id']
+        return f"辯論已啟動！任務 ID: {launch_res.json()['task_id']}", launch_res.json()['task_id'], "⏳ 正在初始化辯論環境..."
         
     except Exception as e:
-        return f"啟動失敗: {e}", None
+        return f"啟動失敗: {e}", None, f"啟動失敗: {e}"
 
 def stream_debate_log(task_id):
     if not task_id:
-        yield "無任務 ID"
+        yield "無任務 ID", "❌ 無效的任務 ID"
         return
 
     try:
-        client = sseclient.SSEClient(f"{API_URL}/debates/{task_id}/stream")
-        history_md = ""
-        
-        for event in client.events():
-            try:
-                data = json.loads(event.data)
-                role = data.get("role", "System")
-                content = data.get("content", "")
-                
-                icon = "📢"
-                if "Chairman" in role: icon = "👨‍⚖️"
-                elif "Pro" in role or "正方" in role: icon = "🟦"
-                elif "Con" in role or "反方" in role: icon = "🟥"
-                elif "Neutral" in role or "中立" in role: icon = "🟩"
-                elif "Tool" in role: icon = "🛠️"
-                elif "System" in role: icon = "🖥️"
-                
-                entry = f"\n\n### {icon} {role}\n{content}\n\n---"
-                history_md += entry
-                
-                yield history_md
-            except json.JSONDecodeError:
-                pass
+        # Initial status
+        yield "", "🚀 連接辯論串流..."
+
+        # Use requests with stream=True for robust SSE handling
+        with requests.get(f"{API_URL}/debates/{task_id}/stream", stream=True) as response:
+            history_md = ""
+            for line in response.iter_lines():
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith("data: "):
+                        json_str = decoded_line[6:] # Removing "data: " prefix
+                        # print(f"DEBUG STREAM: {json_str[:100]}...", flush=True)
+                        if json_str.strip() == "[DONE]":
+                            yield history_md, "🏁 辯論已圓滿結束。"
+                            break
+                        try:
+                            data = json.loads(json_str)
+                            role = data.get("role", "System")
+                            content = data.get("content", "")
+                            
+                            icon = "📢"
+                            status_msg = f"▶️ {role} 正在發言..."
+                            
+                            if "Chairman" in role or "主席" in role: 
+                                icon = "👨‍⚖️"
+                                status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
+                                if "總結" in content or "結論" in content:
+                                    status_msg = "👨‍⚖️ 主席正在進行總結..."
+                            elif "Pro" in role or "正方" in role: 
+                                icon = "🟦"
+                                status_msg = f"🟦 正方 {role} 正在陳述觀點..."
+                            elif "Con" in role or "反方" in role: 
+                                icon = "🟥"
+                                status_msg = f"🟥 反方 {role} 正在進行反駁..."
+                            elif "Neutral" in role or "中立" in role: 
+                                icon = "🟩"
+                                status_msg = f"🟩 中立觀點 {role} 正在分析..."
+                            elif "Tool" in role or "工具" in role: 
+                                icon = "🛠️"
+                                status_msg = f"🛠️ 系統正在調用工具: {role}..."
+                            elif "Thinking" in role or "思考" in role:
+                                icon = "💭"
+                                status_msg = f"💭 {role.replace('(Thinking)', '').strip()} 正在思考中..."
+                            elif "System" in role: 
+                                icon = "🖥️"
+                            
+                            entry = f"\n\n### {icon} {role}\n{content}\n\n---"
+                            history_md += entry
+                            
+                            yield history_md, status_msg
+                        except json.JSONDecodeError:
+                            pass
     except Exception as e:
-        yield f"**Error connecting to stream:** {str(e)}"
+        yield f"**Error connecting to stream:** {str(e)}", f"❌ 連線錯誤: {str(e)}"
 
 def list_prompts():
     try:
@@ -428,6 +481,8 @@ def delete_toolset(toolset_id):
     except Exception as e:
         return f"刪除失敗: {e}"
 
+
+
 def get_toolset_choices():
     try:
         response = requests.get(f"{API_URL}/toolsets")
@@ -466,12 +521,15 @@ def list_teams():
         # Fetch teams
         teams_res = requests.get(f"{API_URL}/teams")
         teams_res.raise_for_status()
-        teams = teams_res.json()
+        teams_data = teams_res.json()
+        teams = teams_data.get("items", []) if isinstance(teams_data, dict) else teams_data
         
         # Fetch agents to map IDs to Names
         agents_res = requests.get(f"{API_URL}/agents")
         agents_res.raise_for_status()
-        agents = agents_res.json()
+        agents_data = agents_res.json()
+        agents = agents_data.get("items", []) if isinstance(agents_data, dict) else agents_data
+        
         agent_map = {a['id']: a['name'] for a in agents}
         
         data = []
@@ -523,11 +581,16 @@ def delete_team(team_id):
 
 def get_team_choices():
     try:
-        response = requests.get(f"{API_URL}/teams")
+        print("DEBUG: Fetching teams for dropdown...", flush=True)
+        response = requests.get(f"{API_URL}/teams", timeout=20)
         response.raise_for_status()
-        teams = response.json()
-        return [(f"{t['name']} ({t['id']})", t['id']) for t in teams]
-    except:
+        data = response.json()
+        teams = data.get("items", []) if isinstance(data, dict) else data
+        print(f"DEBUG: Found {len(teams)} teams.", flush=True)
+        choices = [(f"{t['name']} ({t['id']})", t['id']) for t in teams]
+        return choices
+    except Exception as e:
+        print(f"ERROR: Failed to get team choices: {e}", flush=True)
         return []
 
 # --- UI Construction ---
@@ -571,24 +634,24 @@ def main():
                                 with gr.Group(visible=False) as step3_group:
                                     gr.Markdown("### 步驟 3/4: 組建團隊")
                                     gr.Markdown("*請選擇預設的辯論團隊 (Teams)*")
+                                    team_warning_msg = gr.Markdown(visible=False)
                                     with gr.Group():
                                         pro_team_dropdown = gr.Dropdown(label="團隊 A (正方/主要視角) - 選擇團隊", multiselect=False, choices=[])
                                     with gr.Group():
                                         con_team_dropdown = gr.Dropdown(label="團隊 B (反方/對立視角) - 選擇團隊", multiselect=False, choices=[])
                                     with gr.Group():
                                         neutral_team_dropdown = gr.Dropdown(label="團隊 C (中立/第三視角) - 選擇團隊", multiselect=False, choices=[])
+                                    
+                                    with gr.Row():
+                                        refresh_teams_btn = gr.Button("🔄 刷新團隊選項")
                                     with gr.Row():
                                         step3_back_btn = gr.Button("⬅️ 上一步")
-                                        step3_next_btn = gr.Button("下一步: 確認並啟動 ➡️", variant="primary")
-
-                                # Step 4: Review
-                                with gr.Group(visible=False) as step4_group:
-                                    gr.Markdown("### 步驟 4/4: 確認配置")
-                                    config_summary = gr.JSON(label="配置摘要")
-                                    start_debate_btn = gr.Button("🚀 確認並啟動辯論", variant="primary", size="lg")
-                                    step4_back_btn = gr.Button("⬅️ 修改配置")
+                                        step3_next_btn = gr.Button("🚀 啟動辯論", variant="primary")
+                                    
                                     debate_status_output = gr.Textbox(label="啟動狀態")
                                     task_id_state = gr.State()
+
+                                # Step 4 removed
 
                             # Right Column: Live Status (Always Visible)
                             with gr.Column(scale=2):
@@ -597,55 +660,135 @@ def main():
 
                         # --- Wizard Logic ---
                         def refresh_dropdowns():
+                            print("DEBUG: Refreshing dropdowns...", flush=True)
                             chairmen = get_agent_choices() # Allow any agent to be Chairman
                             teams = get_team_choices()
                             return (
-                                gr.Dropdown(choices=chairmen),
-                                gr.Dropdown(choices=teams),
-                                gr.Dropdown(choices=teams),
-                                gr.Dropdown(choices=teams)
+                                gr.update(choices=chairmen),
+                                gr.update(choices=teams),
+                                gr.update(choices=teams),
+                                gr.update(choices=teams)
+                            )
+                        
+                        def refresh_teams_only(chairman_val, team_a_val, team_b_val, team_c_val):
+                            try:
+                                print(f"DEBUG: Refreshing teams. Chairman: {chairman_val}", flush=True)
+                                # 1. Fetch all teams
+                                response = requests.get(f"{API_URL}/teams", timeout=20)
+                                response.raise_for_status()
+                                data = response.json()
+                                all_teams = data.get("items", []) if isinstance(data, dict) else data
+                                
+                                # 2. Filter based on Chairman
+                                c_id = extract_id_from_dropdown(chairman_val)
+                                available_teams = []
+                                excluded_team_names = []
+                                
+                                for t in all_teams:
+                                    # If chairman is defined and is a member of this team, exclude it
+                                    if c_id and c_id in t.get('member_ids', []):
+                                        excluded_team_names.append(t['name'])
+                                        continue
+                                    available_teams.append(t)
+                                
+                                warning_update = gr.update(visible=False, value="")
+                                if excluded_team_names:
+                                    msg = f"⚠️ **注意**：以下團隊因包含所選主席而被隱藏：{', '.join(excluded_team_names)}"
+                                    warning_update = gr.update(visible=True, value=msg)
+                                
+                                # 3. Prepare Choices List
+                                full_choices = [(f"{t['name']} ({t['id']})", t['id']) for t in available_teams]
+                                
+                                # 4. Filter for each dropdown to ensure uniqueness
+                                # Extract current selected IDs
+                                val_a = extract_id_from_dropdown(team_a_val)
+                                val_b = extract_id_from_dropdown(team_b_val)
+                                val_c = extract_id_from_dropdown(team_c_val)
+                                
+                                # Helper to generate choices excluding currently selected others
+                                def get_choices_excluding(exclude_ids):
+                                    return [c for c in full_choices if c[1] not in exclude_ids]
+
+                                choices_a = get_choices_excluding([val_b, val_c]) if val_b or val_c else full_choices
+                                choices_b = get_choices_excluding([val_a, val_c]) if val_a or val_c else full_choices
+                                choices_c = get_choices_excluding([val_a, val_b]) if val_a or val_b else full_choices
+                                
+                                return (
+                                    gr.update(choices=choices_a, value=team_a_val if (team_a_val and extract_id_from_dropdown(team_a_val) in [c[1] for c in choices_a]) else None), 
+                                    gr.update(choices=choices_b, value=team_b_val if (team_b_val and extract_id_from_dropdown(team_b_val) in [c[1] for c in choices_b]) else None), 
+                                    gr.update(choices=choices_c, value=team_c_val if (team_c_val and extract_id_from_dropdown(team_c_val) in [c[1] for c in choices_c]) else None),
+                                    warning_update
+                                )
+                            except Exception as e:
+                                print(f"ERROR in refresh_teams_only: {e}", flush=True)
+                                return (gr.update(), gr.update(), gr.update(), gr.update(visible=False))
+
+                        def go_to_step1(): return (gr.update(visible=True), gr.update(visible=False), gr.update(visible=False))
+                        def go_to_step2(topic):
+                            if not topic: return (gr.update(visible=True), gr.update(visible=False), gr.update(visible=False))
+                            return (gr.update(visible=False), gr.update(visible=True), gr.update(visible=False))
+                        def go_to_step3(chairman):
+                            print(f"DEBUG: go_to_step3 called with chairman='{chairman}'")
+                            if not chairman: 
+                                print("DEBUG: No chairman selected, staying on Step 2")
+                                return (
+                                    gr.update(visible=False), gr.update(visible=True), gr.update(visible=False),
+                                    gr.update(), gr.update(), gr.update()
+                                )
+                            
+                            
+                            # Do not reset choices here, leave it to refresh_teams_only
+                            return (
+                                gr.update(visible=False), gr.update(visible=False), gr.update(visible=True),
+                                gr.update(), gr.update(), gr.update()
                             )
 
-                        def go_to_step1(): return (gr.Group(visible=True), gr.Group(visible=False), gr.Group(visible=False), gr.Group(visible=False))
-                        def go_to_step2(topic):
-                            if not topic: return (gr.Group(visible=True), gr.Group(visible=False), gr.Group(visible=False), gr.Group(visible=False))
-                            return (gr.Group(visible=False), gr.Group(visible=True), gr.Group(visible=False), gr.Group(visible=False))
-                        def go_to_step3(chairman):
-                            if not chairman: return (gr.Group(visible=False), gr.Group(visible=True), gr.Group(visible=False), gr.Group(visible=False))
-                            return (gr.Group(visible=False), gr.Group(visible=False), gr.Group(visible=True), gr.Group(visible=False))
-                        def go_to_step4(topic, rounds, chairman, pro, con, neutral):
-                            summary = {
-                                "Topic": topic,
-                                "Rounds": rounds,
-                                "Chairman": chairman,
-                                "Team A": pro,
-                                "Team B": con,
-                                "Team C": neutral
-                            }
-                            return (gr.Group(visible=False), gr.Group(visible=False), gr.Group(visible=False), gr.Group(visible=True), summary)
-
-                        step1_next_btn.click(go_to_step2, inputs=[topic_input], outputs=[step1_group, step2_group, step3_group, step4_group])
-                        step2_back_btn.click(go_to_step1, outputs=[step1_group, step2_group, step3_group, step4_group])
-                        step2_next_btn.click(go_to_step3, inputs=[chairman_dropdown], outputs=[step1_group, step2_group, step3_group, step4_group])
-                        step3_back_btn.click(go_to_step2, inputs=[topic_input], outputs=[step1_group, step2_group, step3_group, step4_group])
-                        step3_next_btn.click(go_to_step4, 
-                            inputs=[topic_input, rounds_slider, chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
-                            outputs=[step1_group, step2_group, step3_group, step4_group, config_summary]
+                        step1_next_btn.click(go_to_step2, inputs=[topic_input], outputs=[step1_group, step2_group, step3_group])
+                        step2_back_btn.click(go_to_step1, outputs=[step1_group, step2_group, step3_group])
+                        step2_next_btn.click(
+                            go_to_step3, 
+                            inputs=[chairman_dropdown], 
+                            outputs=[step1_group, step2_group, step3_group, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown]
+                        ).then(
+                            refresh_teams_only,
+                            inputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
+                            outputs=[pro_team_dropdown, con_team_dropdown, neutral_team_dropdown, team_warning_msg]
+                        ).then(
+                            refresh_teams_only,
+                            inputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
+                            outputs=[pro_team_dropdown, con_team_dropdown, neutral_team_dropdown, team_warning_msg]
                         )
-                        step4_back_btn.click(go_to_step3, inputs=[chairman_dropdown], outputs=[step1_group, step2_group, step3_group, step4_group])
 
-                        refresh_roles_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
-                        step1_next_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
-
-                        start_debate_btn.click(
+                        step3_back_btn.click(go_to_step2, inputs=[topic_input], outputs=[step1_group, step2_group, step3_group])
+                        step3_next_btn.click(
                             launch_debate_config,
                             inputs=[topic_input, chairman_dropdown, rounds_slider, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
-                            outputs=[debate_status_output, task_id_state]
+                            outputs=[debate_status_output, task_id_state, live_log]
                         ).success(
                             stream_debate_log,
                             inputs=[task_id_state],
-                            outputs=[live_log]
+                            outputs=[live_log, debate_status_output]
                         )
+
+                        refresh_roles_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
+                        
+                        # Full dependency chain for team selection
+                        team_inputs = [chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown]
+                        team_outputs = [pro_team_dropdown, con_team_dropdown, neutral_team_dropdown, team_warning_msg]
+
+                        refresh_teams_btn.click(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
+                        step1_next_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
+                        
+                        # Auto-refresh and filter when any related dropdown changes
+                        chairman_dropdown.change(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
+                        pro_team_dropdown.change(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
+                        con_team_dropdown.change(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
+                        neutral_team_dropdown.change(refresh_teams_only, inputs=team_inputs, outputs=team_outputs)
+                        
+                        # Initialize dropdowns on page load
+                        demo.load(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
+
+
                     
                     # Sub-tab 1.2: Agent 管理
                     with gr.TabItem("👥 Agent 管理"):
@@ -722,7 +865,7 @@ def main():
                             )
 
                         def update_agent_dropdown():
-                            return gr.Dropdown(choices=get_agent_choices())
+                            return gr.update(choices=get_agent_choices())
 
                         refresh_agents_btn.click(format_agent_list, outputs=agents_table)
                         refresh_agent_select_btn.click(update_agent_dropdown, outputs=selected_agent_id_input)
@@ -745,13 +888,13 @@ def main():
                             save_agent,
                             inputs=[agent_id_state, agent_name, agent_role, agent_specialty, agent_prompt, agent_config],
                             outputs=[agent_op_msg, agent_tabs]
-                        ).then(format_agent_list, outputs=agents_table)
+                        ).success(format_agent_list, outputs=agents_table).success(update_agent_dropdown, outputs=selected_agent_id_input)
                         
                         delete_agent_btn.click(
                             delete_agent,
                             inputs=[selected_agent_id_input],
                             outputs=[agent_op_msg]
-                        ).then(format_agent_list, outputs=agents_table)
+                        ).success(format_agent_list, outputs=agents_table).success(update_agent_dropdown, outputs=selected_agent_id_input)
 
                         demo.load(format_agent_list, outputs=agents_table)
                         demo.load(update_agent_dropdown, outputs=selected_agent_id_input)
@@ -788,10 +931,10 @@ def main():
 
                                 # Logic
                                 def update_team_dropdown():
-                                    return gr.Dropdown(choices=get_team_choices())
+                                    return gr.update(choices=get_team_choices())
                                 
                                 def update_member_dropdown():
-                                    return gr.Dropdown(choices=get_agent_choices())
+                                    return gr.update(choices=get_agent_choices())
 
                                 def load_team_to_edit(team_id):
                                     if not team_id:
@@ -902,8 +1045,8 @@ def main():
                                 add_custom_tool_output = gr.Textbox(label="新增結果")
 
                                 def update_visibility(type_val):
-                                    return (gr.Group(visible=(type_val=="http")),
-                                            gr.Group(visible=(type_val=="python")))
+                                    return (gr.update(visible=(type_val=="http")),
+                                            gr.update(visible=(type_val=="python")))
 
                                 tool_type.change(fn=update_visibility, inputs=tool_type, outputs=[http_config_group, python_config_group])
 
@@ -962,10 +1105,10 @@ def main():
 
                                 # Logic
                                 def refresh_tool_choices():
-                                    return gr.Dropdown(choices=get_all_tool_names())
+                                    return gr.update(choices=get_all_tool_names())
 
                                 def update_toolset_dropdown():
-                                    return gr.Dropdown(choices=get_toolset_choices())
+                                    return gr.update(choices=get_toolset_choices())
 
                                 refresh_toolsets_btn.click(list_toolsets, outputs=toolsets_table)
                                 refresh_ts_select_btn.click(update_toolset_dropdown, outputs=selected_toolset_id)
@@ -1073,7 +1216,7 @@ def main():
                                         term_op_msg = gr.Textbox(label="操作結果")
 
                                 def update_term_dropdown():
-                                    return gr.Dropdown(choices=get_financial_term_choices())
+                                    return gr.update(choices=get_financial_term_choices())
 
                                 # Load term details when selected
                                 def load_term_details(term_id):
@@ -1132,7 +1275,7 @@ def main():
                         prompts_table = gr.DataFrame(wrap=True)
 
                 def update_prompt_dropdown():
-                    return gr.Dropdown(choices=get_all_prompt_keys())
+                    return gr.update(choices=get_all_prompt_keys())
 
                 refresh_prompt_select_btn.click(update_prompt_dropdown, outputs=prompt_key_dropdown)
 
@@ -1164,7 +1307,7 @@ def main():
                         
                         gr.Markdown("### 操作")
                         load_replay_btn = gr.Button("📖 讀取報告", variant="primary")
-                        download_link = gr.Markdown("") # For download link
+                        download_file = gr.File(label="下載報告", interactive=False)
 
                     with gr.Column(scale=3):
                         gr.Markdown("### 報告內容")
@@ -1172,19 +1315,29 @@ def main():
 
                 # Event Handlers
                 def update_replay_list():
-                    return gr.Dropdown(choices=list_replays())
+                    return gr.update(choices=list_replays())
                 
                 refresh_replays_btn.click(update_replay_list, outputs=replay_file_dropdown)
                 
                 def on_load_replay(filename):
                     content = get_replay_markdown(filename)
-                    link = f"[📥 點擊下載原始文件]({get_replay_download_link(filename)})"
-                    return content, link
+                    if not content or content == "Error loading replay.":
+                        return "無法讀取報告。", None
+                        
+                    # Save to temp file for download
+                    tmp_path = f"/tmp/{filename}"
+                    try:
+                        with open(tmp_path, "w", encoding="utf-8") as f:
+                            f.write(content)
+                        return content, tmp_path
+                    except Exception as e:
+                        print(f"Error writing temp file: {e}")
+                        return content, None
                 
                 load_replay_btn.click(
                     on_load_replay,
                     inputs=[replay_file_dropdown],
-                    outputs=[replay_viewer, download_link]
+                    outputs=[replay_viewer, download_file]
                 )
                 
                 # Init list

@@ -9,7 +9,7 @@ services:
       - "7860:7860"
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
-      - API_URL=http://api:8000
+      - API_URL=http://api:8000/api/v1
     depends_on:
       - api
     volumes:
@@ -64,7 +64,6 @@ services:
     environment:
       - SEARXNG_BASE_URL=http://localhost:8080/
       - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY}
-      - BING_SEARCH_API_KEY=${BING_SEARCH_API_KEY}
       - GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
     volumes:

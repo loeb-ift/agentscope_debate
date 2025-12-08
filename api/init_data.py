@@ -9,6 +9,7 @@ import yaml
 import os
 import glob
 from api.financial_terms_data import FINANCIAL_TERMS_DATA
+from api import financial_models
 import json
 
 PROMPTS_AGENTS_DIR = "prompts/agents"
@@ -18,7 +19,7 @@ def initialize_financial_terms(db: Session):
     print("Initializing financial terms...")
 
     # 若表已有資料，略過（避免重複種子）
-    if db.query(models.FinancialTerm).first():
+    if db.query(financial_models.FinancialTerm).first():
         print("Financial terms already exist, skipping initialization.")
         return
 
@@ -45,7 +46,7 @@ def initialize_financial_terms(db: Session):
                     }
                     if not term_id:
                         term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
-                    terms_to_create.append(models.FinancialTerm(
+                    terms_to_create.append(financial_models.FinancialTerm(
                         term_id=term_id,
                         term_name=zh_name,
                         term_category=category,
@@ -73,7 +74,7 @@ def initialize_financial_terms(db: Session):
                 term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
         if term_id in existing_ids:
             continue
-        terms_to_create.append(models.FinancialTerm(
+        terms_to_create.append(financial_models.FinancialTerm(
             term_id=term_id,
             term_name=zh_name,
             term_category=category,
@@ -415,6 +416,73 @@ def initialize_default_teams(db: Session):
         print(f"Error creating default teams: {e}")
         db.rollback()
 
+def initialize_companies_and_securities(db: Session):
+    """初始化公司與證券（若表為空，從 JSON 種子匯入）"""
+    import json
+    from datetime import datetime
+    base = os.path.join("data", "seeds")
+
+    def parse_date(date_str):
+        if not date_str:
+            return None
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    # Companies
+    if not db.query(financial_models.Company).first():
+        path = os.path.join(base, "companies.zh-TW.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    seed = json.load(f)
+                    for c in seed.get("companies", []):
+                        # Parse dates
+                        if 'incorporation_date' in c:
+                            c['incorporation_date'] = parse_date(c['incorporation_date'])
+                        if 'ipo_date' in c:
+                            c['ipo_date'] = parse_date(c['ipo_date'])
+                        if 'delisting_date' in c:
+                            c['delisting_date'] = parse_date(c['delisting_date'])
+                        if 'rating_date' in c:
+                            c['rating_date'] = parse_date(c['rating_date'])
+                        
+                        db.add(financial_models.Company(**c))
+                db.commit()
+                print("Seeded Companies from JSON")
+            except Exception as e:
+                print(f"Warning: seed companies failed: {e}")
+                db.rollback()
+    else:
+        print("Companies already exist, skip seeding")
+
+    # Securities
+    if not db.query(financial_models.Security).first():
+        path = os.path.join(base, "securities.zh-TW.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    seed = json.load(f)
+                    for s in seed.get("securities", []):
+                        # Parse dates
+                        if 'listing_date' in s:
+                            s['listing_date'] = parse_date(s['listing_date'])
+                        if 'maturity_date' in s:
+                            s['maturity_date'] = parse_date(s['maturity_date'])
+                        if 'last_price_date' in s:
+                            s['last_price_date'] = parse_date(s['last_price_date'])
+
+                        db.add(financial_models.Security(**s))
+                db.commit()
+                print("Seeded Securities from JSON")
+            except Exception as e:
+                print(f"Warning: seed securities failed: {e}")
+                db.rollback()
+    else:
+        print("Securities already exist, skip seeding")
+
+
 def initialize_all(db: Session):
     """執行所有必要的初始化步驟"""
     print("--- Starting System Initialization ---")
@@ -458,5 +526,10 @@ def initialize_all(db: Session):
         initialize_financial_terms(db)
     except Exception as e:
         print(f"Warning: Financial Terms initialization failed: {e}")
+
+    try:
+        initialize_companies_and_securities(db)
+    except Exception as e:
+        print(f"Warning: Companies/Securities initialization failed: {e}")
 
     print("--- System Initialization Complete ---")

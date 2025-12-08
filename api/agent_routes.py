@@ -17,7 +17,7 @@ def get_db():
 
 # --- Agent Management API ---
 
-@router.get("/api/v1/agents", response_model=List[schemas.Agent])
+@router.get("/api/v1/agents", response_model=schemas.AgentList)
 def list_agents(
     skip: int = 0,
     limit: int = 100,
@@ -37,7 +37,7 @@ def list_agents(
         query = query.filter(models.Agent.role == role)
     
     agents = query.offset(skip).limit(limit).all()
-    return agents
+    return {"items": agents}
 
 @router.post("/api/v1/agents", response_model=schemas.Agent, status_code=201)
 def create_agent(agent: schemas.AgentCreate, db: Session = Depends(get_db)):
@@ -67,15 +67,33 @@ def create_agent(agent: schemas.AgentCreate, db: Session = Depends(get_db)):
     
     return db_agent
 
-@router.get("/api/v1/agents/{agent_id}", response_model=schemas.Agent)
-def get_agent(agent_id: str, db: Session = Depends(get_db)):
+@router.get("/api/v1/agents/{agent_id_or_name}", response_model=schemas.Agent)
+def get_agent(agent_id_or_name: str, db: Session = Depends(get_db)):
     """
     獲取特定 Agent 的詳細資訊。
+    支援使用 ID 或 Name 進行查找。
     """
-    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    # 1. Try by ID
+    agent = db.query(models.Agent).filter(models.Agent.id == agent_id_or_name).first()
+    
+    # 2. Try by Name
+    if not agent:
+        agent = db.query(models.Agent).filter(models.Agent.name == agent_id_or_name).first()
+
+    # 3. Try by Name with role suffix removed (if present) - handling frontend formatting
+    if not agent:
+         # Check common suffixes based on roles (with space before)
+         # e.g. "Name (analyst)" -> remove " (analyst)"
+         for role_suffix in ["(analyst)", "(debater)", "(chairman)"]:
+             suffix = f" {role_suffix}"
+             if agent_id_or_name.endswith(suffix):
+                 potential_name = agent_id_or_name[:-len(suffix)]
+                 agent = db.query(models.Agent).filter(models.Agent.name == potential_name).first()
+                 if agent:
+                     break
     
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id_or_name}")
     
     return agent
 
@@ -160,9 +178,10 @@ def get_available_roles():
 
 # --- Team Management API ---
 
-@router.get("/api/v1/teams", response_model=List[schemas.Team])
+@router.get("/api/v1/teams", response_model=schemas.TeamList)
 def list_teams(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(models.Team).offset(skip).limit(limit).all()
+    teams = db.query(models.Team).offset(skip).limit(limit).all()
+    return {"items": teams}
 
 @router.post("/api/v1/teams", response_model=schemas.Team, status_code=201)
 def create_team(team: schemas.TeamCreate, db: Session = Depends(get_db)):
