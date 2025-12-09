@@ -8,6 +8,7 @@ import sys
 import yaml
 import asyncio
 import resource
+import difflib
 from datetime import datetime
 from worker.llm_utils import call_llm, call_llm_async
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
@@ -906,9 +907,38 @@ class DebateCycle:
                             collected_evidence.append(f"【證據 {current_step}】{tool_name}\n結果摘要: {preview}")
 
                         except Exception as e:
-                            tool_result = {"error": f"Tool execution error: {str(e)}"}
-                            print(f"ERROR: Tool {tool_name} failed: {e}")
-                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {str(e)}")
+                            error_msg = str(e)
+                            
+                            # --- Tool Name Correction Logic ---
+                            if "not found" in error_msg or "Tool" in error_msg:
+                                all_tools = list(tool_registry.list().keys())
+                                matches = []
+                                
+                                # 1. Fuzzy Match (Original)
+                                fuzzy = difflib.get_close_matches(tool_name, all_tools, n=3, cutoff=0.4)
+                                matches.extend(fuzzy)
+                                
+                                # 2. Case-Insensitive Substring Match (New)
+                                tool_name_lower = tool_name.lower()
+                                for t in all_tools:
+                                    if tool_name_lower in t.lower() or t.lower() in tool_name_lower:
+                                        if t not in matches:
+                                            matches.append(t)
+                                            
+                                # 3. Limit suggestions
+                                matches = matches[:5]
+                                
+                                if matches:
+                                    suggestion = f" Did you mean: {', '.join(matches)}?"
+                                    error_msg += suggestion
+                                else:
+                                    # If absolutely no match, list all tools in current group if possible, or top 5 generic
+                                    error_msg += f" Available tools: {', '.join(all_tools[:5])}..."
+                            # ----------------------------------
+                            
+                            tool_result = {"error": f"Tool execution error: {error_msg}"}
+                            print(f"ERROR: Tool {tool_name} failed: {error_msg}")
+                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {error_msg}")
                         
                         # Update prompt with tool result for NEXT step
                         current_prompt = f"""工具 {tool_name} 的執行結果：
