@@ -654,10 +654,16 @@ def get_financial_term_choices():
 
 def get_system_config():
     try:
-        response = requests.get(f"{API_URL}/config")
+        # Note: /config is mounted at /api/v1/internal/config
+        response = requests.get(f"{API_URL}/internal/config")
         return response.json()
-    except:
+    except Exception as e:
+        print(f"Error fetching config: {e}")
         return {}
+
+def get_config_keys():
+    config = get_system_config()
+    return list(config.keys()) if config else []
 
 def update_system_config(key, value):
     try:
@@ -1702,24 +1708,76 @@ def main():
             # ==============================
             with gr.TabItem("⚙️ 系統設置"):
                 gr.Markdown("### 系統環境變數設置 (.env)")
-                gr.Markdown("*修改後設定將寫入 .env 文件，部分設定可能需要重啟容器生效。*")
+                gr.Markdown("*直接編輯表格中的「數值 (Value)」欄位，然後點擊保存。*")
                 
                 with gr.Row():
-                    config_key = gr.Dropdown(
-                        label="配置項", 
-                        choices=["MAX_TEAMS_PER_DEBATE", "MAX_MEMBERS_PER_TEAM", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
-                        allow_custom_value=True
-                    )
-                    config_value = gr.Textbox(label="設定值")
-                    save_config_btn = gr.Button("💾 保存設定", variant="primary")
+                    refresh_config_btn = gr.Button("🔄 刷新配置")
+                    save_config_btn = gr.Button("💾 保存所有修改", variant="primary")
+                
+                config_table = gr.DataFrame(
+                    headers=["配置項 (Key)", "數值 (Value)", "說明 (Description)"],
+                    datatype=["str", "str", "str"],
+                    col_count=(3, "fixed"),
+                    interactive=True,
+                    wrap=True
+                )
                 
                 config_msg = gr.Textbox(label="操作結果")
                 
+                def load_config_data():
+                    try:
+                        # Fetch from backend which returns list of dicts
+                        response = requests.get(f"{API_URL}/internal/config")
+                        data = response.json()
+                        # Convert to List of Lists for Dataframe
+                        df_data = []
+                        for item in data:
+                            df_data.append([item["key"], item["value"], item["description"]])
+                        return df_data
+                    except Exception as e:
+                        print(f"Error loading config: {e}")
+                        return []
+
+                def save_config_data(df):
+                    try:
+                        # df is a pandas DataFrame or list of lists depending on gradio version/config
+                        success_count = 0
+                        
+                        # Iterate rows (handle both dataframe and list)
+                        if hasattr(df, 'iterrows'):
+                            iterator = df.iterrows()
+                        else:
+                            iterator = df
+
+                        for item in iterator:
+                            if hasattr(df, 'iterrows'):
+                                _, row = item
+                                key = row[0]
+                                value = row[1]
+                            else:
+                                key = item[0]
+                                value = item[1]
+                                
+                            try:
+                                requests.post(f"{API_URL}/internal/config", json={"key": key, "value": str(value)})
+                                success_count += 1
+                            except:
+                                pass
+                        
+                        return f"成功保存 {success_count} 項配置！(部分設定需重啟生效)"
+                    except Exception as e:
+                        return f"保存失敗: {e}"
+
+                refresh_config_btn.click(load_config_data, outputs=config_table)
+                
                 save_config_btn.click(
-                    update_system_config,
-                    inputs=[config_key, config_value],
+                    save_config_data,
+                    inputs=[config_table],
                     outputs=[config_msg]
-                )
+                ).then(load_config_data, outputs=config_table)
+                
+                # Init
+                demo.load(load_config_data, outputs=config_table)
 
     return demo
 

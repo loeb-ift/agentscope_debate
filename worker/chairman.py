@@ -1,12 +1,12 @@
 from agentscope.agent import AgentBase
 from typing import Dict, Any
-import redis
 import json
 import re
 from worker.llm_utils import call_llm
 from worker.tool_config import get_tools_description, get_recommended_tools_for_topic, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
 from api.database import SessionLocal
+from api.redis_client import get_redis_client
 
 class Chairman(AgentBase):
     """
@@ -614,11 +614,15 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
         """
         print(f"Chairman '{self.name}' is summarizing round {round_num}.")
         
-        redis_client = redis.Redis(host='redis', port=6379, db=0)
+        redis_client = get_redis_client()
         evidence_key = f"debate:{debate_id}:evidence"
         
         # 獲取本輪累積的證據/工具調用
-        evidence_list = [json.loads(item) for item in redis_client.lrange(evidence_key, 0, -1)]
+        try:
+            evidence_list = [json.loads(item) for item in redis_client.lrange(evidence_key, 0, -1)]
+        except Exception as e:
+            print(f"Error fetching evidence from Redis: {e}")
+            evidence_list = []
         
         # 構建證據摘要 (應用簡單的緊湊化策略)
         compact_evidence = []
@@ -634,6 +638,7 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
         # 暫時依賴 evidence_list 作為代理，或者假設 debate_cycle 會傳入上下文
         
         db = SessionLocal()
+        next_round = round_num + 1
         try:
             default_prompt = """你是辯論賽主席。你的任務是總結第 {round_num} 輪辯論。
 請根據賽前分析的【主席手卡】進行評估：
@@ -643,12 +648,12 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
 請回答：
 1. 本輪雙方是否觸及關鍵交鋒點？
 2. 提出的證據是否有效支持了論點？
-3. 下一輪辯論應該聚焦什麼問題？
+3. 第 {next_round} 輪辯論應該聚焦什麼問題？
 
 請保持中立、專業，並給出具體引導。"""
             
             template = PromptService.get_prompt(db, "chairman.summarize_round", default=default_prompt)
-            system_prompt = template.format(round_num=round_num, handcard=handcard)
+            system_prompt = template.format(round_num=round_num, handcard=handcard, next_round=next_round)
         finally:
             db.close()
 
@@ -667,7 +672,11 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
         self.speak(final_summary)
         
         # 清除本輪證據 (準備下一輪)
-        redis_client.delete(evidence_key)
+        try:
+            redis_client.delete(evidence_key)
+        except Exception as e:
+            print(f"Error clearing evidence key: {e}")
+            
         return final_summary
 
     def summarize_debate(self, debate_id: str, topic: str, rounds_data: list, handcard: str = "") -> str:

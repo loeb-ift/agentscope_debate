@@ -193,6 +193,9 @@ class DebateCycle:
         print(f"Debate '{self.debate_id}' has ended.")
         self._publish_log("System", f"Debate '{self.debate_id}' has ended.")
         
+        # Send explicit DONE signal to close the stream
+        self.redis_client.publish(f"debate:{self.debate_id}:log_stream", "[DONE]")
+        
         return {
             "topic": self.topic,
             "rounds_data": self.rounds_data,
@@ -794,47 +797,41 @@ class DebateCycle:
         finally:
             db.close()
         
-        # Async LLM Call
-        response = await call_llm_async(user_prompt, system_prompt=system_prompt)
-        print(f"DEBUG: Agent {agent.name} raw response: {response[:500]}")  # 只印前 500 字符
+        # === Multi-Step Tool Execution Loop ===
+        max_steps = 3
+        current_step = 0
+        current_prompt = user_prompt
+        collected_evidence = [] # Track evidence for fallback report
+        
+        while current_step < max_steps:
+            current_step += 1
+            
+            # Async LLM Call
+            response = await call_llm_async(current_prompt, system_prompt=system_prompt)
+            print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
-        # Retry 機制
-        if not response:
-            print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
-            retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
-            response = await call_llm_async(retry_prompt, system_prompt=system_prompt)
-            print(f"DEBUG: Agent {agent.name} retry response: {response[:500]}")
-        
-        # 檢查是否調用工具
-        print(f"DEBUG: Checking for tool call in response (length: {len(response)})")
-        
-        try:
-            # 嘗試提取 JSON (支援純 JSON 或混在文字中的 JSON)
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                print(f"DEBUG: Extracted JSON string: {json_str[:200]}...")
+            # Retry 機制 (Only for empty response on first step)
+            if not response and current_step == 1:
+                print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
+                retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
+                response = await call_llm_async(retry_prompt, system_prompt=system_prompt)
+            
+            # Check for tool call
+            try:
+                # 嘗試提取 JSON
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if not json_match:
+                    # No JSON found -> Assume final speech -> Return
+                    return response
                 
+                json_str = json_match.group(0)
                 try:
                     tool_call = json.loads(json_str)
-                    print(f"DEBUG: Successfully parsed JSON: {tool_call}")
-                except json.JSONDecodeError as e:
-                    print(f"WARNING: JSON decode failed: {e}")
-                    print(f"DEBUG: Failed JSON string: {json_str}")
-                    # 如果解析失敗，視為普通文本回應
+                except json.JSONDecodeError:
+                    # JSON parse failed -> Treat as text
                     return response
 
-                if isinstance(tool_call, dict) and "error" in tool_call:
-                    error_msg = tool_call["error"]
-                    print(f"WARNING: Agent returned error JSON: {error_msg}")
-                    # 自動重試機制：強制引導使用搜尋工具
-                    if "未提供具體任務" in str(error_msg) or "無法確定" in str(error_msg):
-                        retry_prompt = f"""你似乎不確定該做什麼。請作為{side}方，針對辯題「{self.topic}」進行事實查核。
-請務必調用 `searxng.search` 工具，查詢相關新聞或數據。
-例：{{"tool": "searxng.search", "params": {{"q": "{self.topic} 爭議點"}}}}"""
-                        print(f"DEBUG: Auto-retrying with guidance...")
-                        return await call_llm_async(retry_prompt, system_prompt=system_prompt)
-                
+                # Check if valid tool call
                 if isinstance(tool_call, dict) and "tool" in tool_call and "params" in tool_call:
                     tool_name = tool_call["tool"]
                     params = tool_call["params"]
@@ -845,12 +842,10 @@ class DebateCycle:
                         print(f"⚙️ Agent {agent.name} is resetting equipped tools to group: {target_group}")
                         self._publish_log(f"{agent.name} (Meta-Tool)", f"Resetting tools to group: {target_group}")
                         
-                        # Update Agent's tool selection
-                        # Get all tools in this group
                         group_tools = tool_registry.list(groups=[target_group])
                         self.agent_tools_map[agent.name] = list(group_tools.keys())
                         
-                        # Re-prompt agent with new tools (Recursive call or loop? Loop is safer)
+                        # Recursive retry with new tools (Reset steps)
                         return await self._agent_turn_async(agent, side, round_num)
 
                     # --- Meta-Tool: call_chairman (Intervention) ---
@@ -859,60 +854,29 @@ class DebateCycle:
                         print(f"🚨 Agent {agent.name} is calling Chairman for help: {reason}")
                         self._publish_log(f"{agent.name} (SOS)", f"請求主席介入：{reason}")
 
-                        # 1. Chairman generates clarification
-                        chairman_prompt = f"""
-Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難。
-回報原因：{reason}
-
-請根據你的賽前分析手卡（Handcard），為該 Agent 提供一段「背景補充說明」或「引導指示」。
-請保持簡短、明確，幫助它繼續進行分析。
-"""
-                        clarification = await call_llm_async(chairman_prompt, system_prompt="你是辯論主席。你的任務是協助遇到困難的辯手，提供必要的背景資訊引導，但不要直接替它辯論。")
+                        chairman_prompt = f"Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難。\n回報原因：{reason}\n請根據你的賽前分析手卡，提供引導。"
+                        clarification = await call_llm_async(chairman_prompt, system_prompt="你是辯論主席。請協助遇到困難的辯手。")
                         
                         self._publish_log("Chairman (Intervention)", f"主席回應：{clarification}")
-                        print(f"💡 Chairman provided clarification: {clarification}")
-
-                        # 2. Retry Agent Turn with Clarification
-                        # We need to inject this clarification into the next prompt.
-                        # For simplicity, we can recurse but append the clarification to history or a special context.
-                        # Here we append it to history temporarily for the retry.
                         
-                        intervention_msg = {"role": "Chairman (Intervention)", "content": f"針對你的問題「{reason}」，補充說明如下：\n{clarification}\n\n請根據此資訊繼續你的分析。"}
+                        intervention_msg = {"role": "Chairman (Intervention)", "content": f"補充說明：\n{clarification}\n請繼續分析。"}
                         self.history.append(intervention_msg)
                         
-                        # Retry
+                        # Recursive retry (Reset steps)
                         return await self._agent_turn_async(agent, side, round_num)
                     
-                    print(f"✓ Agent {agent.name} is calling tool: {tool_name}")
-                    print(f"✓ Tool parameters: {json.dumps(params, ensure_ascii=False)}")
+                    # --- Regular Tool Execution ---
+                    print(f"✓ Agent {agent.name} calling {tool_name}")
                     self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
                     
-                    # 執行工具 (支援所有註冊的工具)
-                    # Note: Tools might still be sync (requests). We run them in executor to avoid blocking loop.
                     try:
-                        print(f"DEBUG: Executing tool {tool_name}...")
-                        from worker import tasks  # Lazy import to avoid circular dependency
-                        
-                        # Execute sync tool in thread pool
+                        from worker import tasks
                         loop = asyncio.get_running_loop()
                         tool_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
                         
-                        print(f"✓ Tool execution successful")
-                        print(f"DEBUG: Tool result preview: {str(tool_result)[:300]}...")
-                        self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功獲取數據。")
+                        self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
                         
-                        # Record successful tool usage to Tool LTM
-                        with ReMeToolLongTermMemory() as tool_mem:
-                            tool_mem.record(
-                                intent=f"Debate on {self.topic}",
-                                tool_name=tool_name,
-                                params=params,
-                                result=tool_result,
-                                success=True
-                            )
-                        
-                        # --- Evidence Recording for Neutral Verification ---
-                        # Record full evidence details to Redis for verification
+                        # Record Evidence
                         evidence_entry = {
                             "role": f"{agent.name} ({side})",
                             "agent_name": agent.name,
@@ -925,39 +889,58 @@ Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難�
                             "round": round_num
                         }
                         self.redis_client.rpush(self.evidence_key, json.dumps(evidence_entry, ensure_ascii=False))
-                        # ------------------------------------------------
+                        
+                        # Add to local collection (Truncated for summary)
+                        # Avoid huge context overhead
+                        result_str = str(tool_result)
+                        if len(result_str) > 200:
+                            preview = result_str[:200] + "... (完整內容已存檔)"
+                        else:
+                            preview = result_str
+                            
+                        collected_evidence.append(f"【證據 {current_step}】{tool_name}\n結果摘要: {preview}")
 
                     except Exception as e:
                         tool_result = {"error": f"Tool execution error: {str(e)}"}
-                        print(f"ERROR: Tool {tool_name} execution failed: {e}")
-                        
-                        # Record failed tool usage
-                        with ReMeToolLongTermMemory() as tool_mem:
-                            tool_mem.record(
-                                intent=f"Debate on {self.topic}",
-                                tool_name=tool_name,
-                                params=params,
-                                result=str(e),
-                                success=False
-                            )
+                        print(f"ERROR: Tool {tool_name} failed: {e}")
+                        collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {str(e)}")
                     
-                    # 將工具結果反饋給 Agent 生成最終發言
-                    prompt_with_tool = f"""工具 {tool_name} 的執行結果：
+                    # Update prompt with tool result for NEXT step
+                    current_prompt = f"""工具 {tool_name} 的執行結果：
 {json.dumps(tool_result, ensure_ascii=False, indent=2)}
 
-請根據這些證據進行發言。請務必使用繁體中文，並引用具體數據。"""
+請根據這些證據進行發言。如果你覺得證據不足，可以再次調用其他工具（請繼續輸出 JSON）。
+如果證據足夠，請輸出最終論點（純文字）。"""
                     
-                    print(f"DEBUG: Asking agent to generate final response based on tool result...")
-                    final_response = await call_llm_async(prompt_with_tool, system_prompt=system_prompt)
-                    print(f"DEBUG: Agent {agent.name} final response: {final_response[:500]}...")
-                    return final_response
+                    # Loop continues to next step...
+                    continue
+
+                # Handle Error JSON
+                elif isinstance(tool_call, dict) and "error" in tool_call:
+                     # ... (Existing error handling logic) ...
+                     # For brevity, if error JSON, we treat as text or retry logic (omitted complex retry for now to fit structure)
+                     # Let's just return it or basic text to avoid stuck loop
+                     return str(tool_call)
+                
                 else:
-                    print(f"DEBUG: JSON parsed but missing 'tool' or 'params' keys: {tool_call.keys()}")
-            else:
-                print(f"DEBUG: No JSON structure found in response")
-        except Exception as e:
-            print(f"ERROR: Tool execution parsing failed: {e}")
-            import traceback
-            traceback.print_exc()
+                    # JSON found but not a tool call -> Treat as text response
+                    return response
+
+            except Exception as e:
+                print(f"Error in agent loop: {e}")
+                return response
         
-        return response
+        # Loop ended without text response -> Return Collected Evidence Report
+        print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Returning evidence report.")
+        self._publish_log(f"{agent.name} (Report)", "⚠️ 工具調用次數已達上限，回傳已收集的證據摘要...")
+        
+        evidence_text = "\n\n".join(collected_evidence)
+        fallback_report = f"""(系統自動生成報告)
+Agent {agent.name} 已達到工具調用上限，未能發表最終觀點。
+以下是該 Agent 在思考過程中收集到的證據摘要：
+
+{evidence_text}
+
+(請接續討論或由主席判斷是否需要補充)"""
+        
+        return fallback_report

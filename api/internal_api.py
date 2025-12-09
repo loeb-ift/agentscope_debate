@@ -19,7 +19,15 @@ def update_config(config: ConfigUpdate):
 
 @router.get("/config")
 def get_config():
-    return Config.get_all()
+    """Return list of {key, value, description}"""
+    configs = Config.get_all()
+    result = []
+    for k, v in configs.items():
+        desc = Config.CONFIG_DESCRIPTIONS.get(k, "")
+        result.append({"key": k, "value": str(v), "description": desc})
+    # Sort for better UX (keys with description first, then alphabetical)
+    result.sort(key=lambda x: (not x["description"], x["key"]))
+    return result
 
 def get_db():
     db = SessionLocal()
