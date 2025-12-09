@@ -807,10 +807,11 @@ class DebateCycle:
         current_prompt = user_prompt
         collected_evidence = [] # Track evidence for fallback report
         
-        while current_step < max_steps:
-            current_step += 1
-            
-            # Async LLM Call
+        while True: # Outer loop for extension retry
+            while current_step < max_steps:
+                current_step += 1
+                
+                # Async LLM Call
             response = await call_llm_async(current_prompt, system_prompt=system_prompt)
             print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
@@ -994,7 +995,7 @@ class DebateCycle:
                                 
                                 # Update prompt with guidance
                                 current_prompt = f"主席已批准延長調查。\n指導：{res_json.get('guidance')}\n請繼續你的調查或發言。"
-                                continue # Continue loop
+                                continue # Continue Outer Loop (re-enters Inner Loop with higher max_steps)
                             else:
                                 self._publish_log("Chairman (Review)", f"❌ 拒絕延長：{res_json.get('reason')}")
                                 current_prompt = f"主席拒絕了你的申請。\n理由：{res_json.get('reason')}\n請立即根據現有資訊發表總結。"
@@ -1014,12 +1015,15 @@ class DebateCycle:
             # or fallback report if it's still JSON but not extension
             if not json_match:
                 return decision_response
+            
+            # If reached here, it means extension denied or invalid request, break outer loop to fallback
+            break
 
         # Loop ended (either max steps reached again, or denied extension) -> Return Collected Evidence Report
         print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Returning evidence report.")
-        self._publish_log(f"{agent.name} (Report)", "⚠️ 調用次數耗盡，回傳證據摘要...")
         
         evidence_text = "\n\n".join(collected_evidence)
+        self._publish_log(f"{agent.name} (Report)", f"⚠️ 調用次數耗盡，回傳證據摘要：\n\n{evidence_text}")
         fallback_report = f"""(系統自動生成報告)
 Agent {agent.name} 已達到工具調用上限，未能發表最終觀點。
 以下是該 Agent 在思考過程中收集到的證據摘要：
