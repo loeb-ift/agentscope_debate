@@ -593,10 +593,29 @@ class DebateCycle:
             # Async LLM Call
             response = await call_llm_async(user_prompt, system_prompt=system_prompt)
             
-            # 嘗試解析 JSON
-            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-            if json_match:
-                selected_tools = json.loads(json_match.group(0))
+            # 嘗試解析 JSON (支援 List 或 Dict 格式)
+            selected_tools = []
+            
+            # 1. Try List [...]
+            list_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if list_match:
+                try:
+                    selected_tools = json.loads(list_match.group(0))
+                except:
+                    pass
+
+            # 2. Try Dict {"tools": [...]} if list failed
+            if not selected_tools:
+                dict_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if dict_match:
+                    try:
+                        data = json.loads(dict_match.group(0))
+                        if isinstance(data, dict):
+                            selected_tools = data.get("tools") or data.get("tool_names") or []
+                    except:
+                        pass
+            
+            if selected_tools and isinstance(selected_tools, list):
                 self.agent_tools_map[agent.name] = selected_tools
                 print(f"Agent {agent.name} selected tools: {selected_tools}")
                 
