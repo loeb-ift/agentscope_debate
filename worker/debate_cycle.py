@@ -70,7 +70,7 @@ class DebateCycle:
         }
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", json.dumps(event_data, ensure_ascii=False))
 
-    def _save_report_to_file(self, conclusion: str, jury_report: str = None):
+    def _save_report_to_file(self, conclusion: str, jury_report: str = None, start_time: datetime = None, end_time: datetime = None):
         """
         將辯論過程保存為 Markdown 文件。
         """
@@ -110,6 +110,14 @@ class DebateCycle:
                 f.write(f"### {role}\n")
                 f.write(f"{content}\n\n")
                 f.write("---\n\n")
+            
+            # Duration Stats
+            if start_time and end_time:
+                duration = end_time - start_time
+                f.write("## ⏱️ 統計資訊\n")
+                f.write(f"- **開始時間**: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"- **結束時間**: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"- **總耗時**: {str(duration).split('.')[0]}\n")
                 
         print(f"Report saved to {filepath}")
 
@@ -123,6 +131,7 @@ class DebateCycle:
         """
         开始辩论循环 (Async).
         """
+        start_time = datetime.now()
         print(f"Debate '{self.debate_id}' has started. Mem: {self._get_memory_usage()}")
         self._publish_log("System", f"Debate '{self.debate_id}' has started.")
         self._publish_progress(5, "初始化辯論環境...", "init")
@@ -187,9 +196,10 @@ class DebateCycle:
         # Record outcome to Task LTM
         with ReMeTaskLongTermMemory() as task_mem:
             task_mem.record(self.topic, final_conclusion)
-            
+        
+        end_time = datetime.now()
         # Save to File (Markdown Report)
-        self._save_report_to_file(final_conclusion, jury_report)
+        self._save_report_to_file(final_conclusion, jury_report, start_time, end_time)
 
         print(f"Debate '{self.debate_id}' has ended.")
         self._publish_log("System", f"Debate '{self.debate_id}' has ended.")
