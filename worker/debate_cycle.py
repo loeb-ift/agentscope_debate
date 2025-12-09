@@ -541,7 +541,7 @@ class DebateCycle:
 
     async def _agent_select_tools_async(self, agent: AgentBase, side: str):
         """
-        Agent 在辯論開始前動態選擇最適合的工具 (Async)。
+        Agent 在辯論開始前動態選擇最適合的工具 (Async).
         """
         db = SessionLocal()
         try:
@@ -758,7 +758,7 @@ class DebateCycle:
             # However, if we want to allow DB overrides of the *structure*, we could.
             # For now, let's stick to the dynamic construction to ensure custom prompts work.
             system_prompt = default_system
-
+            
             # 2. User Prompt (Tool Instruction)
             default_user = """
 这是第 {round_num} 輪辯論。
@@ -807,141 +807,141 @@ class DebateCycle:
         current_prompt = user_prompt
         collected_evidence = [] # Track evidence for fallback report
         
-        while True: # Outer loop for extension retry
+        while True: # Outer Loop for Extension Retry
             while current_step < max_steps:
                 current_step += 1
                 
                 # Async LLM Call
-            response = await call_llm_async(current_prompt, system_prompt=system_prompt)
-            print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
+                response = await call_llm_async(current_prompt, system_prompt=system_prompt)
+                print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
-            # Retry 機制 (Only for empty response on first step)
-            if not response and current_step == 1:
-                print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
-                retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
-                response = await call_llm_async(retry_prompt, system_prompt=system_prompt)
-            
-            # Check for tool call
-            try:
-                # 嘗試提取 JSON
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
-                if not json_match:
-                    # No JSON found -> Assume final speech -> Return
-                    return response
+                # Retry 機制 (Only for empty response on first step)
+                if not response and current_step == 1:
+                    print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
+                    retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
+                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt)
                 
-                json_str = json_match.group(0)
+                # Check for tool call
                 try:
-                    tool_call = json.loads(json_str)
-                except json.JSONDecodeError:
-                    # JSON parse failed -> Treat as text
-                    return response
-
-                # Check if valid tool call
-                if isinstance(tool_call, dict) and "tool" in tool_call and "params" in tool_call:
-                    tool_name = tool_call["tool"]
-                    params = tool_call["params"]
+                    # 嘗試提取 JSON
+                    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                    if not json_match:
+                        # No JSON found -> Assume final speech -> Return
+                        return response
                     
-                    # --- Meta-Tool: reset_equipped_tools ---
-                    if tool_name == "reset_equipped_tools":
-                        target_group = params.get("group", "basic")
-                        print(f"⚙️ Agent {agent.name} is resetting equipped tools to group: {target_group}")
-                        self._publish_log(f"{agent.name} (Meta-Tool)", f"Resetting tools to group: {target_group}")
-                        
-                        group_tools = tool_registry.list(groups=[target_group])
-                        self.agent_tools_map[agent.name] = list(group_tools.keys())
-                        
-                        # Recursive retry with new tools (Reset steps)
-                        return await self._agent_turn_async(agent, side, round_num)
-
-                    # --- Meta-Tool: call_chairman (Intervention) ---
-                    if tool_name == "call_chairman":
-                        reason = params.get("reason", "未說明原因")
-                        print(f"🚨 Agent {agent.name} is calling Chairman for help: {reason}")
-                        self._publish_log(f"{agent.name} (SOS)", f"請求主席介入：{reason}")
-
-                        chairman_prompt = f"Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難。\n回報原因：{reason}\n請根據你的賽前分析手卡，提供引導。"
-                        clarification = await call_llm_async(chairman_prompt, system_prompt="你是辯論主席。請協助遇到困難的辯手。")
-                        
-                        self._publish_log("Chairman (Intervention)", f"主席回應：{clarification}")
-                        
-                        intervention_msg = {"role": "Chairman (Intervention)", "content": f"補充說明：\n{clarification}\n請繼續分析。"}
-                        self.history.append(intervention_msg)
-                        
-                        # Recursive retry (Reset steps)
-                        return await self._agent_turn_async(agent, side, round_num)
-                    
-                    # --- Regular Tool Execution ---
-                    print(f"✓ Agent {agent.name} calling {tool_name}")
-                    self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
-                    
+                    json_str = json_match.group(0)
                     try:
-                        from worker import tasks
-                        loop = asyncio.get_running_loop()
-                        tool_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
-                        
-                        self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
-                        
-                        # Record Evidence
-                        evidence_entry = {
-                            "role": f"{agent.name} ({side})",
-                            "agent_name": agent.name,
-                            "side": side,
-                            "tool": tool_name,
-                            "params": params,
-                            "result": tool_result,
-                            "timestamp": datetime.now().isoformat(),
-                            "verified": False,
-                            "round": round_num
-                        }
-                        self.redis_client.rpush(self.evidence_key, json.dumps(evidence_entry, ensure_ascii=False))
-                        
-                        # Add to local collection (Truncated for summary)
-                        # Avoid huge context overhead
-                        result_str = str(tool_result)
-                        if len(result_str) > 200:
-                            preview = result_str[:200] + "... (完整內容已存檔)"
-                        else:
-                            preview = result_str
-                            
-                        collected_evidence.append(f"【證據 {current_step}】{tool_name}\n結果摘要: {preview}")
+                        tool_call = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # JSON parse failed -> Treat as text
+                        return response
 
-                    except Exception as e:
-                        tool_result = {"error": f"Tool execution error: {str(e)}"}
-                        print(f"ERROR: Tool {tool_name} failed: {e}")
-                        collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {str(e)}")
-                    
-                    # Update prompt with tool result for NEXT step
-                    current_prompt = f"""工具 {tool_name} 的執行結果：
+                    # Check if valid tool call
+                    if isinstance(tool_call, dict) and "tool" in tool_call and "params" in tool_call:
+                        tool_name = tool_call["tool"]
+                        params = tool_call["params"]
+                        
+                        # --- Meta-Tool: reset_equipped_tools ---
+                        if tool_name == "reset_equipped_tools":
+                            target_group = params.get("group", "basic")
+                            print(f"⚙️ Agent {agent.name} is resetting equipped tools to group: {target_group}")
+                            self._publish_log(f"{agent.name} (Meta-Tool)", f"Resetting tools to group: {target_group}")
+                            
+                            group_tools = tool_registry.list(groups=[target_group])
+                            self.agent_tools_map[agent.name] = list(group_tools.keys())
+                            
+                            # Recursive retry with new tools (Reset steps)
+                            return await self._agent_turn_async(agent, side, round_num)
+
+                        # --- Meta-Tool: call_chairman (Intervention) ---
+                        if tool_name == "call_chairman":
+                            reason = params.get("reason", "未說明原因")
+                            print(f"🚨 Agent {agent.name} is calling Chairman for help: {reason}")
+                            self._publish_log(f"{agent.name} (SOS)", f"請求主席介入：{reason}")
+
+                            chairman_prompt = f"Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難。\n回報原因：{reason}\n請根據你的賽前分析手卡，提供引導。"
+                            clarification = await call_llm_async(chairman_prompt, system_prompt="你是辯論主席。請協助遇到困難的辯手。")
+                            
+                            self._publish_log("Chairman (Intervention)", f"主席回應：{clarification}")
+                            
+                            intervention_msg = {"role": "Chairman (Intervention)", "content": f"補充說明：\n{clarification}\n請繼續分析。"}
+                            self.history.append(intervention_msg)
+                            
+                            # Recursive retry (Reset steps)
+                            return await self._agent_turn_async(agent, side, round_num)
+                        
+                        # --- Regular Tool Execution ---
+                        print(f"✓ Agent {agent.name} calling {tool_name}")
+                        self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
+                        
+                        try:
+                            from worker import tasks
+                            loop = asyncio.get_running_loop()
+                            tool_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
+                            
+                            self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
+                            
+                            # Record Evidence
+                            evidence_entry = {
+                                "role": f"{agent.name} ({side})",
+                                "agent_name": agent.name,
+                                "side": side,
+                                "tool": tool_name,
+                                "params": params,
+                                "result": tool_result,
+                                "timestamp": datetime.now().isoformat(),
+                                "verified": False,
+                                "round": round_num
+                            }
+                            self.redis_client.rpush(self.evidence_key, json.dumps(evidence_entry, ensure_ascii=False))
+                            
+                            # Add to local collection (Truncated for summary)
+                            # Avoid huge context overhead
+                            result_str = str(tool_result)
+                            if len(result_str) > 200:
+                                preview = result_str[:200] + "... (完整內容已存檔)"
+                            else:
+                                preview = result_str
+                                
+                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n結果摘要: {preview}")
+
+                        except Exception as e:
+                            tool_result = {"error": f"Tool execution error: {str(e)}"}
+                            print(f"ERROR: Tool {tool_name} failed: {e}")
+                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {str(e)}")
+                        
+                        # Update prompt with tool result for NEXT step
+                        current_prompt = f"""工具 {tool_name} 的執行結果：
 {json.dumps(tool_result, ensure_ascii=False, indent=2)}
 
 請根據這些證據進行發言。如果你覺得證據不足，可以再次調用其他工具（請繼續輸出 JSON）。
 如果證據足夠，請輸出最終論點（純文字）。"""
+                        
+                        # Loop continues to next step...
+                        continue
+
+                    # Handle Error JSON
+                    elif isinstance(tool_call, dict) and "error" in tool_call:
+                        # ... (Existing error handling logic) ...
+                        # For brevity, if error JSON, we treat as text or retry logic (omitted complex retry for now to fit structure)
+                        # Let's just return it or basic text to avoid stuck loop
+                        return str(tool_call)
                     
-                    # Loop continues to next step...
-                    continue
+                    else:
+                        # JSON found but not a tool call -> Treat as text response
+                        return response
 
-                # Handle Error JSON
-                elif isinstance(tool_call, dict) and "error" in tool_call:
-                     # ... (Existing error handling logic) ...
-                     # For brevity, if error JSON, we treat as text or retry logic (omitted complex retry for now to fit structure)
-                     # Let's just return it or basic text to avoid stuck loop
-                     return str(tool_call)
-                
-                else:
-                    # JSON found but not a tool call -> Treat as text response
+                except Exception as e:
+                    print(f"Error in agent loop: {e}")
                     return response
-
-            except Exception as e:
-                print(f"Error in agent loop: {e}")
-                return response
-        
-        # --- Loop Limit Reached ---
-        # Allow one-time extension request
-        if not has_extended:
-            print(f"INFO: Agent {agent.name} reached base limit. Offering extension.")
-            self._publish_log(f"{agent.name} (System)", "⚠️ 基礎調查次數已用盡。正在詢問是否需要延長調查...")
             
-            extension_option_prompt = f"""
+            # --- Loop Limit Reached ---
+            # Allow one-time extension request
+            if not has_extended:
+                print(f"INFO: Agent {agent.name} reached base limit. Offering extension.")
+                self._publish_log(f"{agent.name} (System)", "⚠️ 基礎調查次數已用盡。正在詢問是否需要延長調查...")
+                
+                extension_option_prompt = f"""
 【系統提示】你的基礎工具調用次數 ({base_max_steps} 次) 已用盡。
 
 請選擇：
@@ -949,76 +949,76 @@ class DebateCycle:
 2. **申請延長**：如果你認為證據嚴重不足，可向主席申請延長調查（最多增加 {extension_steps} 次）。
    請輸出 JSON：{{"tool": "request_extension", "params": {{"reason": "說明理由..."}}}}
 """
-            # Ask Agent
-            decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt)
-            
-            # Check for extension request
-            json_match = re.search(r'\{.*\}', decision_response, re.DOTALL)
-            if json_match:
-                try:
-                    req = json.loads(json_match.group(0))
-                    if req.get("tool") == "request_extension":
-                        reason = req.get("params", {}).get("reason", "無理由")
-                        self._publish_log(f"{agent.name} (Request)", f"申請延長調查：{reason}")
-                        
-                        # Call Chairman for Review
-                        db = SessionLocal()
-                        try:
-                            review_template = PromptService.get_prompt(db, "debate.chairman_review_extension")
-                            # If template not found (e.g. not init yet), use fallback
-                            if not review_template:
-                                review_template = """
+                # Ask Agent
+                decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt)
+                
+                # Check for extension request
+                json_match = re.search(r'\{.*\}', decision_response, re.DOTALL)
+                if json_match:
+                    try:
+                        req = json.loads(json_match.group(0))
+                        if req.get("tool") == "request_extension":
+                            reason = req.get("params", {}).get("reason", "無理由")
+                            self._publish_log(f"{agent.name} (Request)", f"申請延長調查：{reason}")
+                            
+                            # Call Chairman for Review
+                            db = SessionLocal()
+                            try:
+                                review_template = PromptService.get_prompt(db, "debate.chairman_review_extension")
+                                # If template not found (e.g. not init yet), use fallback
+                                if not review_template:
+                                    review_template = """
 你是主席。Agent {agent_name} 申請延長調查。
 理由：{reason}
 證據摘要：{evidence_summary}
 請回傳 JSON: {{"approved": true/false, "reason": "...", "guidance": "..."}}
 """
-                            chairman_sys = review_template.format(
-                                agent_name=agent.name,
-                                side=side,
-                                topic=self.topic,
-                                reason=reason,
-                                evidence_summary="\n".join(collected_evidence)[-1000:] # Last 1000 chars
-                            )
-                        finally:
-                            db.close()
+                                chairman_sys = review_template.format(
+                                    agent_name=agent.name, 
+                                    side=side, 
+                                    topic=self.topic, 
+                                    reason=reason,
+                                    evidence_summary="\n".join(collected_evidence)[-1000:] # Last 1000 chars
+                                )
+                            finally:
+                                db.close()
+                                
+                            chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys)
                             
-                        chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys)
-                        
-                        # Parse Chairman Decision
-                        try:
-                            res_json = json.loads(re.search(r'\{.*\}', chairman_res, re.DOTALL).group(0))
-                            if res_json.get("approved"):
-                                max_steps += extension_steps
-                                has_extended = True
-                                self._publish_log("Chairman (Review)", f"✅ 批准延長：{res_json.get('reason')}")
-                                
-                                # Update prompt with guidance
-                                current_prompt = f"主席已批准延長調查。\n指導：{res_json.get('guidance')}\n請繼續你的調查或發言。"
-                                continue # Continue Outer Loop (re-enters Inner Loop with higher max_steps)
-                            else:
-                                self._publish_log("Chairman (Review)", f"❌ 拒絕延長：{res_json.get('reason')}")
-                                current_prompt = f"主席拒絕了你的申請。\n理由：{res_json.get('reason')}\n請立即根據現有資訊發表總結。"
-                                # Fall through to forced summary (or return text if agent replies text next time)
-                                # Actually, we should force summary NOW or give one last chance?
-                                # Let's give one last chance with text-only constraint.
-                                final_res = await call_llm_async(current_prompt, system_prompt=system_prompt)
-                                return final_res
-                                
-                        except Exception as e:
-                            print(f"Error parsing chairman review: {e}")
-                            # Fallback: Deny
-                except:
-                    pass
-            
-            # If not extension request or denied/failed, return the response as text (if it's text)
-            # or fallback report if it's still JSON but not extension
-            if not json_match:
-                return decision_response
+                            # Parse Chairman Decision
+                            try:
+                                res_json = json.loads(re.search(r'\{.*\}', chairman_res, re.DOTALL).group(0))
+                                if res_json.get("approved"):
+                                    max_steps += extension_steps
+                                    has_extended = True
+                                    self._publish_log("Chairman (Review)", f"✅ 批准延長：{res_json.get('reason')}")
+                                    
+                                    # Update prompt with guidance
+                                    current_prompt = f"主席已批准延長調查。\n指導：{res_json.get('guidance')}\n請繼續你的調查或發言。"
+                                    continue # Continue Outer Loop (re-enters Inner Loop with higher max_steps)
+                                else:
+                                    self._publish_log("Chairman (Review)", f"❌ 拒絕延長：{res_json.get('reason')}")
+                                    current_prompt = f"主席拒絕了你的申請。\n理由：{res_json.get('reason')}\n請立即根據現有資訊發表總結。"
+                                    # Fall through to forced summary (or return text if agent replies text next time)
+                                    # Actually, we should force summary NOW or give one last chance?
+                                    # Let's give one last chance with text-only constraint.
+                                    final_res = await call_llm_async(current_prompt, system_prompt=system_prompt)
+                                    return final_res
+                                    
+                            except Exception as e:
+                                print(f"Error parsing chairman review: {e}")
+                                # Fallback: Deny
+                    except:
+                        pass
+                
+                # If not extension request or denied/failed, return the response as text (if it's text)
+                # or fallback report if it's still JSON but not extension
+                if not json_match:
+                    return decision_response
             
             # If reached here, it means extension denied or invalid request, break outer loop to fallback
             break
-
+        
         # Loop ended (either max steps reached again, or denied extension) -> Return Collected Evidence Report
         print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Returning evidence report.")
         

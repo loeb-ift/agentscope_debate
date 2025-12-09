@@ -8,6 +8,7 @@ import os
 from api.database import init_db, SessionLocal
 from api import models
 from api.init_data import initialize_all
+from api.config import Config
 # Lazy import wrappers
 def lazy_import_factory(module_name, class_name):
     def factory():
@@ -21,8 +22,7 @@ from api.tool_registry import tool_registry
 load_dotenv()
 
 # 建立 Celery 實例
-redis_host = os.getenv('REDIS_HOST', 'localhost')
-app = Celery('worker', broker=f'redis://{redis_host}:6379/0', backend=f'redis://{redis_host}:6379/0')
+app = Celery('worker', broker=Config.REDIS_URL, backend=Config.REDIS_URL)
 app.autodiscover_tasks(['worker'])
 
 # 在 worker 啟動時註冊工具
