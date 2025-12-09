@@ -207,6 +207,7 @@ def get_team_members(team_id):
     return []
 
 def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, neutral_team_id):
+    print(f"DEBUG: Launching debate config... Topic: {topic}", flush=True)
     try:
         # Extract IDs
         chairman_id = extract_id_from_dropdown(chairman_id)
@@ -234,16 +235,21 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
             "teams": teams
         }
         
+        print(f"DEBUG: Creating config...", flush=True)
         config_res = requests.post(f"{API_URL}/debates/config", json=config_payload)
         config_res.raise_for_status()
         config_id = config_res.json()["id"]
+        print(f"DEBUG: Config created ID: {config_id}. Launching...", flush=True)
         
         launch_res = requests.post(f"{API_URL}/debates/launch?config_id={config_id}")
         launch_res.raise_for_status()
         
-        return f"辯論已啟動！任務 ID: {launch_res.json()['task_id']}", launch_res.json()['task_id'], "⏳ 正在初始化辯論環境..."
+        task_id = launch_res.json()['task_id']
+        print(f"DEBUG: Launch success. Task ID: {task_id}", flush=True)
+        return f"辯論已啟動！任務 ID: {task_id}", task_id, "⏳ 正在初始化辯論環境..."
         
     except Exception as e:
+        print(f"ERROR launching debate: {e}", flush=True)
         return f"啟動失敗: {e}", None, f"啟動失敗: {e}"
 
 def stream_debate_log(task_id):

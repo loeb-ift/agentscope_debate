@@ -4,11 +4,11 @@ from typing import List
 from api import schemas, models
 from api.database import SessionLocal
 from api.config import Config
-import redis
 import os
 import glob
 from fastapi.responses import FileResponse
 from worker.celery_app import app as celery_app
+from api.redis_client import get_redis_client
 
 router = APIRouter()
 
@@ -21,8 +21,7 @@ def get_db():
         db.close()
 
 # Redis Connection
-redis_host = os.getenv('REDIS_HOST', 'localhost')
-redis_client = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
+redis_client = get_redis_client()
 
 @router.post("/api/v1/debates/config", response_model=schemas.DebateConfigResponse, status_code=201)
 def create_debate_config(config: schemas.DebateConfigCreate, db: Session = Depends(get_db)):

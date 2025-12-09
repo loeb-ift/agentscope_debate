@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
-import redis
 import json
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -20,6 +19,7 @@ from api.database import SessionLocal, engine, init_db
 from api.init_data import initialize_all
 from worker.celery_app import app as celery_app, load_dynamic_tools
 from api.tool_registry import tool_registry
+from api.redis_client import get_redis_client
 from adapters.searxng_adapter import SearXNGAdapter
 from adapters.duckduckgo_adapter import DuckDuckGoAdapter
 from adapters.yfinance_adapter import YFinanceAdapter
@@ -58,8 +58,7 @@ app.add_middleware(
 )
 
 # Redis 連線
-redis_host = os.getenv('REDIS_HOST', 'localhost')
-redis_client = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
+redis_client = get_redis_client()
 
 # Dependency
 def get_db():

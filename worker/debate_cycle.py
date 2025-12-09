@@ -798,7 +798,11 @@ class DebateCycle:
             db.close()
         
         # === Multi-Step Tool Execution Loop ===
-        max_steps = 3
+        base_max_steps = int(os.getenv("MAX_AGENT_TOOL_STEPS", 5))
+        extension_steps = int(os.getenv("EXTENSION_STEPS", 3))
+        max_steps = base_max_steps
+        has_extended = False
+        
         current_step = 0
         current_prompt = user_prompt
         collected_evidence = [] # Track evidence for fallback report
@@ -930,9 +934,90 @@ class DebateCycle:
                 print(f"Error in agent loop: {e}")
                 return response
         
-        # Loop ended without text response -> Return Collected Evidence Report
+        # --- Loop Limit Reached ---
+        # Allow one-time extension request
+        if not has_extended:
+            print(f"INFO: Agent {agent.name} reached base limit. Offering extension.")
+            self._publish_log(f"{agent.name} (System)", "⚠️ 基礎調查次數已用盡。正在詢問是否需要延長調查...")
+            
+            extension_option_prompt = f"""
+【系統提示】你的基礎工具調用次數 ({base_max_steps} 次) 已用盡。
+
+請選擇：
+1. **發表總結**：直接輸出你的最終觀點（純文字）。
+2. **申請延長**：如果你認為證據嚴重不足，可向主席申請延長調查（最多增加 {extension_steps} 次）。
+   請輸出 JSON：{{"tool": "request_extension", "params": {{"reason": "說明理由..."}}}}
+"""
+            # Ask Agent
+            decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt)
+            
+            # Check for extension request
+            json_match = re.search(r'\{.*\}', decision_response, re.DOTALL)
+            if json_match:
+                try:
+                    req = json.loads(json_match.group(0))
+                    if req.get("tool") == "request_extension":
+                        reason = req.get("params", {}).get("reason", "無理由")
+                        self._publish_log(f"{agent.name} (Request)", f"申請延長調查：{reason}")
+                        
+                        # Call Chairman for Review
+                        db = SessionLocal()
+                        try:
+                            review_template = PromptService.get_prompt(db, "debate.chairman_review_extension")
+                            # If template not found (e.g. not init yet), use fallback
+                            if not review_template:
+                                review_template = """
+你是主席。Agent {agent_name} 申請延長調查。
+理由：{reason}
+證據摘要：{evidence_summary}
+請回傳 JSON: {{"approved": true/false, "reason": "...", "guidance": "..."}}
+"""
+                            chairman_sys = review_template.format(
+                                agent_name=agent.name,
+                                side=side,
+                                topic=self.topic,
+                                reason=reason,
+                                evidence_summary="\n".join(collected_evidence)[-1000:] # Last 1000 chars
+                            )
+                        finally:
+                            db.close()
+                            
+                        chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys)
+                        
+                        # Parse Chairman Decision
+                        try:
+                            res_json = json.loads(re.search(r'\{.*\}', chairman_res, re.DOTALL).group(0))
+                            if res_json.get("approved"):
+                                max_steps += extension_steps
+                                has_extended = True
+                                self._publish_log("Chairman (Review)", f"✅ 批准延長：{res_json.get('reason')}")
+                                
+                                # Update prompt with guidance
+                                current_prompt = f"主席已批准延長調查。\n指導：{res_json.get('guidance')}\n請繼續你的調查或發言。"
+                                continue # Continue loop
+                            else:
+                                self._publish_log("Chairman (Review)", f"❌ 拒絕延長：{res_json.get('reason')}")
+                                current_prompt = f"主席拒絕了你的申請。\n理由：{res_json.get('reason')}\n請立即根據現有資訊發表總結。"
+                                # Fall through to forced summary (or return text if agent replies text next time)
+                                # Actually, we should force summary NOW or give one last chance?
+                                # Let's give one last chance with text-only constraint.
+                                final_res = await call_llm_async(current_prompt, system_prompt=system_prompt)
+                                return final_res
+                                
+                        except Exception as e:
+                            print(f"Error parsing chairman review: {e}")
+                            # Fallback: Deny
+                except:
+                    pass
+            
+            # If not extension request or denied/failed, return the response as text (if it's text)
+            # or fallback report if it's still JSON but not extension
+            if not json_match:
+                return decision_response
+
+        # Loop ended (either max steps reached again, or denied extension) -> Return Collected Evidence Report
         print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Returning evidence report.")
-        self._publish_log(f"{agent.name} (Report)", "⚠️ 工具調用次數已達上限，回傳已收集的證據摘要...")
+        self._publish_log(f"{agent.name} (Report)", "⚠️ 調用次數耗盡，回傳證據摘要...")
         
         evidence_text = "\n\n".join(collected_evidence)
         fallback_report = f"""(系統自動生成報告)

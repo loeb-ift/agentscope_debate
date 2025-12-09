@@ -7,6 +7,8 @@ class Config:
     # Debate Configuration
     MAX_TEAMS_PER_DEBATE = int(os.getenv("MAX_TEAMS_PER_DEBATE", 3))
     MAX_MEMBERS_PER_TEAM = int(os.getenv("MAX_MEMBERS_PER_TEAM", 2))
+    MAX_AGENT_TOOL_STEPS = int(os.getenv("MAX_AGENT_TOOL_STEPS", 5))
+    EXTENSION_STEPS = int(os.getenv("EXTENSION_STEPS", 3))
     
     # System Configuration
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/debate.db")
@@ -18,6 +20,8 @@ class Config:
         "OLLAMA_MODEL": "使用的 LLM 模型名稱 (例如 gpt-oss:20b)",
         "MAX_TEAMS_PER_DEBATE": "每場辯論的最大團隊數",
         "MAX_MEMBERS_PER_TEAM": "每個團隊的最大成員數",
+        "MAX_AGENT_TOOL_STEPS": "Agent 單回合最大工具調用次數 (基礎)",
+        "EXTENSION_STEPS": "Agent 申請延長調查時增加的次數",
         "GOOGLE_SEARCH_API_KEY": "Google Custom Search API Key",
         "GOOGLE_CSE_ID": "Google Custom Search Engine ID",
         "BRAVE_SEARCH_API_KEY": "Brave Search API Key",
