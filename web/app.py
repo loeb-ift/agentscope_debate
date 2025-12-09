@@ -1,9 +1,9 @@
 import gradio as gr
 import requests
 import json
-import sseclient
+# import sseclient  # not used
 import pandas as pd
-import time
+import time  # used in preload and caching sections
 import os
 
 API_URL = os.getenv("API_URL", "http://api:8000/api/v1")
@@ -18,7 +18,7 @@ _CORE_DATA_CACHE = {
 }
 CACHE_TTL = 60  # 60 seconds cache (increased from 30)
 
-def _get_cached_or_fetch(cache_key, fetch_url, timeout=15):
+def _get_cached_or_fetch(cache_key, fetch_url, timeout=5):
     """通用緩存獲取函數"""
     import time
     now = time.time()
@@ -26,10 +26,11 @@ def _get_cached_or_fetch(cache_key, fetch_url, timeout=15):
     
     # 如果緩存有效，直接返回
     if cache and cache["data"] is not None and (now - cache["timestamp"]) < CACHE_TTL:
-        print(f"DEBUG: Using cached {cache_key}", flush=True)
+        print(f"DEBUG: Using cached {cache_key}", flush=True)  # noqa
         return cache["data"]
     
     # 如果有舊緩存且距離上次失敗不到 10 秒，直接使用舊緩存避免頻繁重試
+    # 修正：只有當 data 不為 None 時才使用舊緩存。如果 data 是 None (第一次就失敗)，應該允許立即重試。
     if cache and cache["data"] is not None and (now - cache.get("last_error_time", 0)) < 10:
         print(f"DEBUG: Using stale cache for {cache_key} (recent error)", flush=True)
         return cache["data"]
@@ -82,11 +83,11 @@ def preload_core_data():
     
     # Now preload data
     print("🚀 Preloading core data...", flush=True)
-    agents_data = _get_cached_or_fetch("agents", f"{API_URL}/agents", timeout=15)
-    teams_data = _get_cached_or_fetch("teams", f"{API_URL}/teams", timeout=15)
-    toolsets_data = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets", timeout=15)
-    securities_data = _get_cached_or_fetch("securities", f"{API_URL}/internal/securities", timeout=15)
-    terms_data = _get_cached_or_fetch("financial_terms", f"{API_URL}/internal/financial_terms", timeout=15)
+    agents_data = _get_cached_or_fetch("agents", f"{API_URL}/agents", timeout=10)
+    teams_data = _get_cached_or_fetch("teams", f"{API_URL}/teams", timeout=10)
+    toolsets_data = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets", timeout=10)
+    securities_data = _get_cached_or_fetch("securities", f"{API_URL}/internal/securities", timeout=10)
+    terms_data = _get_cached_or_fetch("financial_terms", f"{API_URL}/internal/financial_terms", timeout=10)
     
     loaded_count = sum(1 for d in [agents_data, teams_data, toolsets_data, securities_data, terms_data] if d)
     
@@ -268,33 +269,50 @@ def stream_debate_log(task_id):
                             break
                         try:
                             data = json.loads(json_str)
+                            
+                            # Handle Score Update Event
+                            if data.get("type") == "score_update":
+                                side = data.get("side")
+                                new_score = data.get("new_score")
+                                delta = data.get("delta")
+                                reason = data.get("reason")
+                                
+                                icon = "⚖️"
+                                delta_str = f"+{delta}" if delta > 0 else f"{delta}"
+                                score_msg = f"**{icon} 評分更新**：【{side}】 {delta_str} 分 (當前: {new_score})\n> 原因：{reason}"
+                                
+                                entry = f"\n\n### {icon} System (Score)\n{score_msg}\n\n---"
+                                history_md += entry
+                                yield history_md, f"⚖️ 評分更新: {side} {delta_str}"
+                                continue
+
                             role = data.get("role", "System")
                             content = data.get("content", "")
                             
                             icon = "📢"
                             status_msg = f"▶️ {role} 正在發言..."
                             
-                            if "Chairman" in role or "主席" in role: 
+                            if "Chairman" in role or "主席" in role:
                                 icon = "👨‍⚖️"
                                 status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
                                 if "總結" in content or "結論" in content:
                                     status_msg = "👨‍⚖️ 主席正在進行總結..."
-                            elif "Pro" in role or "正方" in role: 
+                            elif "Pro" in role or "正方" in role:
                                 icon = "🟦"
                                 status_msg = f"🟦 正方 {role} 正在陳述觀點..."
-                            elif "Con" in role or "反方" in role: 
+                            elif "Con" in role or "反方" in role:
                                 icon = "🟥"
                                 status_msg = f"🟥 反方 {role} 正在進行反駁..."
-                            elif "Neutral" in role or "中立" in role: 
+                            elif "Neutral" in role or "中立" in role:
                                 icon = "🟩"
                                 status_msg = f"🟩 中立觀點 {role} 正在分析..."
-                            elif "Tool" in role or "工具" in role: 
+                            elif "Tool" in role or "工具" in role:
                                 icon = "🛠️"
                                 status_msg = f"🛠️ 系統正在調用工具: {role}..."
                             elif "Thinking" in role or "思考" in role:
                                 icon = "💭"
                                 status_msg = f"💭 {role.replace('(Thinking)', '').strip()} 正在思考中..."
-                            elif "System" in role: 
+                            elif "System" in role:
                                 icon = "🖥️"
                             
                             entry = f"\n\n### {icon} {role}\n{content}\n\n---"
@@ -369,6 +387,41 @@ def create_custom_tool(name, tool_type, url, method, headers_json, python_code, 
     except Exception as e:
         return f"Error creating tool: {e}"
 
+def update_tool(tool_id, name, tool_type, description, schema_json, openapi_json, api_config_json, python_code, group, enabled):
+    try:
+        tool_id = extract_id_from_dropdown(tool_id)
+        
+        schema = json.loads(schema_json) if schema_json else {}
+        openapi = json.loads(openapi_json) if openapi_json else {}
+        api_config = json.loads(api_config_json) if api_config_json else {}
+        
+        payload = {
+            "name": name,
+            "type": tool_type,
+            "description": description,
+            "json_schema": schema,
+            "openapi_spec": openapi,
+            "api_config": api_config,
+            "python_code": python_code,
+            "group": group,
+            "enabled": enabled
+        }
+        
+        response = requests.put(f"{API_URL}/tools/{tool_id}", json=payload)
+        response.raise_for_status()
+        return f"Tool '{name}' updated successfully!"
+    except Exception as e:
+        return f"Error updating tool: {e}"
+
+def delete_tool(tool_id):
+    try:
+        tool_id = extract_id_from_dropdown(tool_id)
+        response = requests.delete(f"{API_URL}/tools/{tool_id}")
+        response.raise_for_status()
+        return "Tool deleted successfully!"
+    except Exception as e:
+        return f"Error deleting tool: {e}"
+
 def generate_description(tool_type, content):
     if not content:
         return "請先填寫代碼或 Schema"
@@ -398,6 +451,15 @@ def list_custom_tools():
         return pd.DataFrame(data, columns=["ID", "Name", "Type", "Group"])
     except Exception as e:
         return pd.DataFrame({"error": [str(e)]})
+
+def get_tool_choices():
+    try:
+        response = requests.get(f"{API_URL}/tools")
+        response.raise_for_status()
+        tools = response.json()
+        return [(f"{t['name']} ({t['id']})", t['id']) for t in tools]
+    except:
+        return []
 
 def list_companies():
     try:
@@ -692,7 +754,8 @@ def main():
                 with gr.Tabs():
                     # Sub-tab 1.1: 發起辯論
                     with gr.TabItem("⚔️ 發起辯論"):
-                        current_step = gr.State(1)
+                        # current_step removed - not used
+                        # current_step = gr.State(1)
                         
                         with gr.Row():
                             # Left Column: Wizard Steps
@@ -746,12 +809,17 @@ def main():
                         # --- Wizard Logic ---
                         _dropdown_cache = {"timestamp": 0, "data": None}
                         
-                        def refresh_dropdowns():
+                        def refresh_dropdowns(force=False):
                             import time
-                            # Cache for 3 seconds to avoid excessive API calls
+                            # Cache for 3 seconds to avoid excessive API calls (unless forced)
                             now = time.time()
-                            if _dropdown_cache["data"] and (now - _dropdown_cache["timestamp"]) < 3:
+                            if not force and _dropdown_cache["data"] and (now - _dropdown_cache["timestamp"]) < 3:
                                 return _dropdown_cache["data"]
+                            
+                            if force:
+                                # Invalidate core cache to fetch fresh data
+                                _CORE_DATA_CACHE["agents"]["timestamp"] = 0
+                                _CORE_DATA_CACHE["teams"]["timestamp"] = 0
                             
                             chairmen = get_agent_choices()
                             teams = get_team_choices()
@@ -764,6 +832,9 @@ def main():
                             _dropdown_cache["data"] = result
                             _dropdown_cache["timestamp"] = now
                             return result
+                        
+                        def force_refresh_dropdowns():
+                            return refresh_dropdowns(force=True)
                         
                         def refresh_teams_only(chairman_val, team_a_val, team_b_val, team_c_val):
                             try:
@@ -839,7 +910,15 @@ def main():
                                 gr.update(), gr.update(), gr.update()
                             )
 
-                        step1_next_btn.click(go_to_step2, inputs=[topic_input], outputs=[step1_group, step2_group, step3_group])
+                        step1_next_btn.click(
+                            refresh_dropdowns,
+                            outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
+                            show_progress=True
+                        ).then(
+                            go_to_step2,
+                            inputs=[topic_input],
+                            outputs=[step1_group, step2_group, step3_group]
+                        )
                         step2_back_btn.click(go_to_step1, outputs=[step1_group, step2_group, step3_group])
                         step2_next_btn.click(
                             go_to_step3, 
@@ -866,7 +945,7 @@ def main():
                             outputs=[live_log, debate_status_output]
                         )
 
-                        refresh_roles_btn.click(refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
+                        refresh_roles_btn.click(force_refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
                         
                         # Full dependency chain for team selection
                         team_inputs = [chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown]
@@ -937,10 +1016,10 @@ def main():
                                     gr.Tabs(selected="agent_edit_tab"), # Switch to Edit Tab
                                     agent_id,
                                     data['name'], 
-                                    data['role'], 
-                                    data.get('specialty', ''), 
-                                    data['system_prompt'], 
-                                    json.dumps(data.get('config_json', {}), indent=2)
+                                    data['role'],
+                                    data.get('specialty', ''),
+                                    data['system_prompt'],
+                                    json.dumps(data.get('config_json', {}), indent=2, ensure_ascii=False)
                                 )
                             except:
                                 return (gr.Tabs(selected="agent_list_tab"), None, "Error", "debater", "", "", "{}")
@@ -1115,7 +1194,90 @@ def main():
                         refresh_tools_btn.click(get_tools_df, outputs=tools_df)
                         demo.load(get_tools_df, outputs=tools_df)
                     
-                    # Sub-tab 2.2: 自定義工具註冊
+                    # Sub-tab 2.2: 編輯/管理工具
+                    with gr.TabItem("✏️ 編輯/管理工具", id="tool_edit_tab"):
+                        tool_id_state = gr.State(value=None)
+                        
+                        with gr.Row():
+                            select_tool_dropdown = gr.Dropdown(label="選擇要編輯的工具", choices=[], scale=2, allow_custom_value=True)
+                            refresh_tool_select_btn = gr.Button("🔄 刷新", scale=0)
+                            load_tool_btn = gr.Button("📂 載入設定", scale=1)
+                        
+                        gr.Markdown("---")
+                        
+                        with gr.Row():
+                            edit_tool_name = gr.Textbox(label="工具名稱 (Name)", placeholder="e.g., tej.stock_price")
+                            edit_tool_type = gr.Dropdown(choices=["api", "http", "python"], label="工具類型 (Type)")
+                            edit_tool_group = gr.Dropdown(choices=["tej", "user_defined", "browser_use", "financial_data"], label="工具組 (Group)", allow_custom_value=True)
+                        
+                        edit_tool_desc = gr.TextArea(label="工具描述 (Description)", lines=3)
+                        
+                        with gr.Accordion("詳細配置 (JSON)", open=True):
+                            edit_tool_schema = gr.Code(label="JSON Schema", language="json", value="{}")
+                            edit_tool_openapi = gr.Code(label="OpenAPI Spec", language="json", value="{}")
+                            edit_tool_config = gr.Code(label="API Config (HTTP Only)", language="json", value="{}")
+                            edit_tool_code = gr.Code(label="Python Code (Python Only)", language="python", value="")
+                        
+                        edit_tool_enabled = gr.Checkbox(label="啟用 (Enabled)", value=True)
+                        
+                        with gr.Row():
+                            save_tool_btn = gr.Button("💾 保存修改", variant="primary")
+                            delete_tool_btn = gr.Button("🗑️ 刪除工具", variant="stop")
+                        
+                        tool_edit_msg = gr.Textbox(label="操作結果")
+
+                        # Logic
+                        def update_tool_dropdown():
+                            return gr.update(choices=get_tool_choices())
+
+                        def load_tool_to_edit(tool_id):
+                            if not tool_id: return (None, "", "api", "basic", "", "{}", "{}", "{}", "", True)
+                            try:
+                                tool_id = extract_id_from_dropdown(tool_id)
+                                res = requests.get(f"{API_URL}/tools/{tool_id}")
+                                res.raise_for_status()
+                                data = res.json()
+                                return (
+                                    data['id'],
+                                    data['name'],
+                                    data['type'],
+                                    data.get('group', 'basic'),
+                                    data.get('description', ''),
+                                    json.dumps(data.get('json_schema') or {}, indent=2, ensure_ascii=False),
+                                    json.dumps(data.get('openapi_spec') or {}, indent=2, ensure_ascii=False),
+                                    json.dumps(data.get('api_config') or {}, indent=2, ensure_ascii=False),
+                                    data.get('python_code', ''),
+                                    data.get('enabled', True)
+                                )
+                            except Exception as e:
+                                return (None, "Error", "api", "basic", str(e), "{}", "{}", "{}", "", True)
+
+                        refresh_tool_select_btn.click(update_tool_dropdown, outputs=select_tool_dropdown)
+                        
+                        load_tool_btn.click(
+                            load_tool_to_edit,
+                            inputs=[select_tool_dropdown],
+                            outputs=[tool_id_state, edit_tool_name, edit_tool_type, edit_tool_group, edit_tool_desc,
+                                     edit_tool_schema, edit_tool_openapi, edit_tool_config, edit_tool_code, edit_tool_enabled]
+                        )
+                        
+                        save_tool_btn.click(
+                            update_tool,
+                            inputs=[tool_id_state, edit_tool_name, edit_tool_type, edit_tool_desc,
+                                    edit_tool_schema, edit_tool_openapi, edit_tool_config, edit_tool_code, edit_tool_group, edit_tool_enabled],
+                            outputs=[tool_edit_msg]
+                        ).then(update_tool_dropdown, outputs=select_tool_dropdown)
+                        
+                        delete_tool_btn.click(
+                            delete_tool,
+                            inputs=[select_tool_dropdown],
+                            outputs=[tool_edit_msg]
+                        ).then(update_tool_dropdown, outputs=select_tool_dropdown)
+
+                        # Init
+                        demo.load(update_tool_dropdown, outputs=select_tool_dropdown)
+
+                    # Sub-tab 2.3: 自定義工具註冊
                     with gr.TabItem("🔧 自定義工具註冊"):
                         with gr.Row():
                             with gr.Column(scale=1):
@@ -1134,7 +1296,18 @@ def main():
                                     tool_python_code = gr.Code(label="Python Code", language="python", value='def main(arg1):\n    return f"Hello {arg1}"')
 
                                 tool_description = gr.Textbox(label="工具描述 (可自動生成)")
-                                generate_desc_btn = gr.Button("✨ 自動生成描述")
+                                with gr.Row():
+                                    generate_desc_btn = gr.Button("✨ 自動生成描述")
+                                    load_tej_tpl_btn = gr.Button("📥 載入 TEJ 範例模板")
+
+                                # Try-it 區塊
+                                gr.Markdown("#### 🔬 Try it 測試 (不入庫)")
+                                data_path = gr.Dropdown(choices=["auto", "data", "datatable.data", "items", "results"], value="auto", label="資料路徑")
+                                try_params = gr.Code(label="測試參數 Params (JSON)", language="json", value='{}')
+                                try_headers = gr.Code(label="附加 Headers (JSON)", language="json", value='{}')  # 目前僅展示，後端以 tool_headers 為主
+                                try_status = gr.Markdown(value="")
+                                try_btn = gr.Button("▶️ Try it", variant="primary")
+                                preview_table = gr.DataFrame(label="預覽資料", wrap=True)
 
                                 add_custom_tool_btn = gr.Button("➕ 新增工具", variant="primary")
                                 add_custom_tool_output = gr.Textbox(label="新增結果")
@@ -1154,19 +1327,105 @@ def main():
                             content = py_code if t_type == "python" else schema
                             return generate_description(t_type, content)
 
+                        def load_tej_template():
+                            try:
+                                res = requests.get(f"{API_URL}/tools/templates/tej-stock-price", timeout=10)
+                                res.raise_for_status()
+                                tpl = res.json()
+                                # 回填表單
+                                api_conf = tpl.get("api_config", {})
+                                headers = api_conf.get("headers", {})
+                                schema = tpl.get("json_schema", {})
+                                example_params = tpl.get("example_params", {})
+                                return (
+                                    gr.update(value=tpl.get("name", "custom.stock_price")), # tool_name
+                                    gr.update(value="http"),                                   # tool_type
+                                    gr.update(value=json.dumps(schema, ensure_ascii=False, indent=2)),
+                                    gr.update(value=api_conf.get("url", "")),
+                                    gr.update(value=api_conf.get("method", "GET")),
+                                    gr.update(value=json.dumps(headers, ensure_ascii=False, indent=2)),
+                                    gr.update(value=json.dumps(example_params, ensure_ascii=False, indent=2)),
+                                    gr.update(value="已載入 TEJ 範例模板，請先修改 URL 與必要參數後按 Try it 驗證。")
+                                )
+                            except Exception as e:
+                                return (
+                                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                                    gr.update(value=f"❌ 載入失敗：{e}")
+                                )
+
+                        def try_run_tool_handler(name, t_type, schema_json, url, method, headers_json, params_json, data_path_sel):
+                            try:
+                                schema = json.loads(schema_json) if schema_json else {}
+                                headers_base = json.loads(headers_json) if headers_json else {}
+                                params = json.loads(params_json) if params_json else {}
+                                api_config = {"url": url, "method": method, "headers": headers_base}
+                                req = {
+                                    "name": name or "try_tool",
+                                    "type": t_type,
+                                    "api_config": api_config,
+                                    "json_schema": schema,
+                                    "params": params
+                                }
+                                resp = requests.post(f"{API_URL}/tools/try-run", json=req, timeout=60)
+                                resp.raise_for_status()
+                                data = resp.json()
+                                # 依資料路徑切換
+                                preview = data.get("preview_rows") or []
+                                if data_path_sel != "auto":
+                                    # 嘗試從 response 取出指定路徑
+                                    body = data.get("response") or {}
+                                    if data_path_sel == "data":
+                                        preview = body.get("data") or []
+                                    elif data_path_sel == "datatable.data":
+                                        dt = body.get("datatable") or {}
+                                        preview = dt.get("data") or []
+                                    elif data_path_sel == "items":
+                                        preview = body.get("items") or []
+                                    elif data_path_sel == "results":
+                                        preview = body.get("results") or []
+                                # 只顯示前 10 筆
+                                df = pd.DataFrame(preview[:10]) if isinstance(preview, list) else pd.DataFrame()
+                                status = f"✅ 成功，預覽 {len(df)} 筆，耗時 {data.get('elapsed_ms', 0)} ms"
+                                if not len(df):
+                                    status = "⚠️ 呼叫成功但沒有可預覽的資料，請檢查參數與資料路徑。"
+                                return (
+                                    gr.update(value=df),
+                                    gr.update(value=status)
+                                )
+                            except Exception as e:
+                                return (
+                                    gr.update(value=pd.DataFrame()),
+                                    gr.update(value=f"❌ 失敗：{e}")
+                                )
+
                         generate_desc_btn.click(
                             wrap_generate,
                             inputs=[tool_type, tool_python_code, tool_schema],
-                            outputs=tool_description
+                            outputs=tool_description,
+                            show_progress=True
+                        )
+
+                        load_tej_tpl_btn.click(
+                            load_tej_template,
+                            outputs=[tool_name, tool_type, tool_schema, tool_url, tool_method, tool_headers, try_params, try_status],
+                            show_progress=True
+                        )
+
+                        try_btn.click(
+                            try_run_tool_handler,
+                            inputs=[tool_name, tool_type, tool_schema, tool_url, tool_method, tool_headers, try_params, data_path],
+                            outputs=[preview_table, try_status],
+                            show_progress=True
                         )
 
                         add_custom_tool_btn.click(
                             create_custom_tool,
                             inputs=[tool_name, tool_type, tool_url, tool_method, tool_headers, tool_python_code, tool_schema, tool_group],
-                            outputs=add_custom_tool_output
+                            outputs=add_custom_tool_output,
+                            show_progress=True
                         ).then(list_custom_tools, outputs=custom_tools_table)
                         
-                        refresh_custom_tools_btn.click(list_custom_tools, outputs=custom_tools_table)
+                        refresh_custom_tools_btn.click(list_custom_tools, outputs=custom_tools_table, show_progress=True)
                         demo.load(list_custom_tools, outputs=custom_tools_table)
                     
                     # Sub-tab 2.3: 工具集管理

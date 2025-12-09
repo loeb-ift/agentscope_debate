@@ -10,3 +10,6 @@ pytest
 duckduckgo-search
 yfinance
 PyYAML
+tenacity
+httpx
+requests

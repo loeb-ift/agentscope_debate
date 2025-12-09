@@ -35,10 +35,22 @@ def get_tools_description() -> str:
     for group, items in grouped_tools.items():
         desc += f"\n### {group.upper()} 工具組：\n"
         for name, data in items:
+            # Ensure schema is loaded for description
+            schema = data.get('schema')
+            if schema is None:
+                try:
+                    # Force load to get schema
+                    full_data = tool_registry.get_tool_data(name)
+                    schema = full_data.get('schema')
+                    # Update local description if needed
+                    data['description'] = full_data.get('description', data['description'])
+                except Exception:
+                    pass
+            
             desc += f"- **{name}** (v{data['version']})\n"
             # 使用 Adapter 中定義的詳細描述 (包含欄位說明)
             desc += f"  描述: {data['description']}\n"
-            desc += f"  Schema: {json.dumps(data['schema'], ensure_ascii=False)}\n"
+            desc += f"  Schema: {json.dumps(schema, ensure_ascii=False)}\n"
     
     return desc
 

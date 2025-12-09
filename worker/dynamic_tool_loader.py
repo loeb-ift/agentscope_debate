@@ -76,7 +76,7 @@ class OpenAPIToolAdapter(ToolAdapter):
         }
     
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
-        """執行 API 調用"""
+        """執行 API 調用，含觀測/警示、TEJ 預設參數與回傳標準化"""
         if not self.openapi_spec:
             return {"error": "No OpenAPI spec defined"}
         
@@ -90,6 +90,7 @@ class OpenAPIToolAdapter(ToolAdapter):
         
         # 2. 準備參數
         params = kwargs.copy()
+        warnings: list[str] = []
         
         # 3. 添加認證
         if self.auth_type == "api_key":
@@ -109,18 +110,82 @@ class OpenAPIToolAdapter(ToolAdapter):
                 # TODO: 支持 header 認證
                 pass
         
+        # 3.5 TEJ 工具的觀測與預設參數（護欄）
+        try:
+            if self.provider and self.provider.lower() == 'tej':
+                # 觀測：缺少 coid 警示（大多數 TEJ 工具需要）
+                if 'coid' not in params:
+                    warnings.append("missing_param:coid")
+                # 預設 opts.limit（避免空切片），若未提供
+                if 'opts.limit' not in params:
+                    params['opts.limit'] = 50
+                    warnings.append("defaulted:opts.limit=50")
+                # 日期區間觀測（不強制轉換，只提示）
+                # 支援兩種常見鍵：mdate.gte/lte 或 start_date/end_date
+                start = params.get('mdate.gte') or params.get('start_date')
+                end = params.get('mdate.lte') or params.get('end_date')
+                if not start or not end:
+                    warnings.append("suggest:add_date_range")
+                else:
+                    # 粗略檢查跨度是否過大（> 366 天）
+                    from datetime import datetime
+                    fmt = "%Y-%m-%d"
+                    try:
+                        d0 = datetime.strptime(str(start)[:10], fmt)
+                        d1 = datetime.strptime(str(end)[:10], fmt)
+                        if (d1 - d0).days > 366:
+                            warnings.append("warn:date_span_too_large")
+                    except Exception:
+                        warnings.append("warn:date_parse_failed")
+        except Exception:
+            # 不阻斷流程
+            pass
+        
         # 4. 執行請求
         try:
             print(f"DEBUG: OpenAPIToolAdapter calling {url} with params: {params}")
-            response = requests.get(url, params=params, timeout=self.timeout)
+            
+            # 添加 User-Agent 避免被 WAF 攔截 (參考 tej_adapter.py)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=self.timeout)
             response.raise_for_status()
-            return response.json()
+            raw = response.json()
+            
+            # 5. 回傳標準化：若為 TEJ，統一輸出 { data: [...] }
+            if self.provider and self.provider.lower() == 'tej':
+                data = None
+                if isinstance(raw.get('data'), list):
+                    data = raw.get('data')
+                else:
+                    data = raw.get('datatable', {}).get('data') if isinstance(raw.get('datatable'), dict) else None
+                if isinstance(data, list):
+                    out = {"data": data}
+                    # 若有 meta，附帶
+                    meta = raw.get('meta') or (raw.get('datatable', {}).get('meta') if isinstance(raw.get('datatable'), dict) else None)
+                    if meta is not None:
+                        out['meta'] = meta
+                    if warnings:
+                        out['warnings'] = warnings
+                    return out
+                else:
+                    # 無法標準化，仍回傳原始，但帶上警示
+                    if warnings:
+                        raw['warnings'] = warnings
+                    return raw
+            
+            # 非 TEJ：原樣返回，但附上可能的警示
+            if warnings and isinstance(raw, dict):
+                raw['warnings'] = warnings
+            return raw
         except requests.exceptions.Timeout:
-            return {"error": f"Request timeout after {self.timeout}s"}
+            return {"error": f"Request timeout after {self.timeout}s", "warnings": warnings} if warnings else {"error": f"Request timeout after {self.timeout}s"}
         except requests.exceptions.HTTPError as e:
-            return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+            return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}", "warnings": warnings} if warnings else {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
         except Exception as e:
-            return {"error": f"Request failed: {str(e)}"}
+            return {"error": f"Request failed: {str(e)}", "warnings": warnings} if warnings else {"error": f"Request failed: {str(e)}"}
 
 
 class DynamicToolLoader:

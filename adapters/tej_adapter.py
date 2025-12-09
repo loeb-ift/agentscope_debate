@@ -88,7 +88,8 @@ class TEJBaseAdapter(ToolAdapter):
         req = self.auth({"headers": {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}, "params": query})
         
         try:
-            print(f"DEBUG: Requesting {url} with params {req['params']}")
+            print(f"DEBUG: Requesting {url}")
+            print(f"DEBUG: Params: {req['params']}")
             resp = requests.get(url, headers=req["headers"], params=req["params"], timeout=self.timeout_sec)
         except requests.RequestException as e:
              raise UpstreamError(code="ERR-NET", http_status=500, message=str(e))
@@ -103,11 +104,15 @@ class TEJBaseAdapter(ToolAdapter):
             raise self.map_error(resp.status_code, body)
 
         raw = resp.json()
-        print(f"DEBUG: Raw response from TEJ: {raw}")
+        # print(f"DEBUG: Raw response from TEJ: {raw}") # Reduce noise if large
         
         rows = raw.get("data")
         if rows is None:
             rows = []
+            
+        print(f"DEBUG: TEJ API returned {len(rows)} rows.")
+        if len(rows) == 0:
+             print(f"WARNING: TEJ API returned 0 rows for {url}. Check date range and filters.")
 
         data = {
             "db": db,

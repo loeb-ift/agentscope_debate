@@ -18,7 +18,7 @@ load_dotenv()
 from api import schemas, models, financial_models
 from api.database import SessionLocal, engine, init_db
 from api.init_data import initialize_all
-from worker.celery_app import app as celery_app
+from worker.celery_app import app as celery_app, load_dynamic_tools
 from api.tool_registry import tool_registry
 from adapters.searxng_adapter import SearXNGAdapter
 from adapters.duckduckgo_adapter import DuckDuckGoAdapter
@@ -35,6 +35,18 @@ from adapters.tej_adapter import (
 
 # FastAPI app 先創建
 app = FastAPI()
+
+import time
+from fastapi import Request
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    print(f"Request: {request.method} {request.url.path} completed in {process_time:.4f}s")
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
 
 # Configure CORS
 app.add_middleware(
@@ -105,6 +117,9 @@ async def startup_event():
     tool_registry.register(TEJFuturesData())
     tool_registry.register(TEJOptionsBasicInfo())
     tool_registry.register(TEJOptionsDailyTrading())
+    
+    # 載入動態工具 (DB-based)
+    load_dynamic_tools()
     
     print("✅ API initialization complete!")
 
@@ -179,18 +194,38 @@ async def stream_debate(task_id: str):
 def list_registry_tools():
     """
     列出所有已註冊的工具（包括代碼與動態工具）。
-    """
-    tools = tool_registry.list()
-    # 修正：由於 list() 不再返回 instance，我們需要一種方法來獲取工具名稱
-    # 這裡我們假設 tool_id 的格式為 "name:version"
-    return {
-        name.split(':')[0]: {
-            "name": name.split(':')[0],
-            "description": data["description"]["description"],
-            "version": data["version"],
-        }
-        for name, data in tools.items()
+    返回統一結構，並安全處理描述欄位：
+    {
+      "tool.name": {"name": "tool.name", "version": "v1", "description": "...", "group": "...", "schema": {...}}
     }
+    """
+    tools = tool_registry.list_tools()  # returns internal dict {tool_id: data}
+    normalized = {}
+    for tool_id, data in tools.items():
+        # tool_id format: name:version
+        try:
+            name, version = tool_id.split(":", 1)
+        except ValueError:
+            name, version = tool_id, data.get("version", "v1")
+        desc = data.get("description")
+        # description may be a string or a dict from adapter.describe()
+        if isinstance(desc, dict):
+            desc = (
+                desc.get("description")
+                or desc.get("desc")
+                or desc.get("summary")
+                or str(desc)
+            )
+        elif desc is None:
+            desc = ""
+        normalized[name] = {
+            "name": name,
+            "version": version,
+            "description": desc,
+            "group": data.get("group"),
+            "schema": data.get("schema"),
+        }
+    return normalized
 
 from jsonschema import validate, ValidationError
 @app.post("/api/v1/tools/test")

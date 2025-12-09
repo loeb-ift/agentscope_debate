@@ -43,6 +43,12 @@ def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
                 agent = AgentBase()
                 if isinstance(c, dict):
                     agent.name = c.get('name', '辯士')
+                    # Inject properties from API config
+                    agent.id = c.get('id')  # Important for toolset lookup
+                    agent.role = c.get('role', 'debater')
+                    agent.specialty = c.get('specialty', '')
+                    agent.system_prompt = c.get('system_prompt', '')
+                    agent.config = c.get('config', {})
                 else:
                     agent.name = "辯士"
                 team_agents.append(agent)
@@ -59,6 +65,7 @@ def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
         pass
 
     debate = DebateCycle(debate_id, topic, chairman, debate_teams, rounds)
+    # Use sync wrapper which calls async start internally
     debate_result = debate.start()
 
     db = SessionLocal()

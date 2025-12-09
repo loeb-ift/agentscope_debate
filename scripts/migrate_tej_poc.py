@@ -28,7 +28,7 @@ def migrate_tej_poc_tools():
                 }
             ],
             "paths": {
-                "/TRAIL/TAIACC.json": {
+                "/TRAIL/AIND.json": {
                     "get": {
                         "summary": "取得公司基本資料",
                         "operationId": "getCompanyInfo",
@@ -121,9 +121,9 @@ def migrate_tej_poc_tools():
                         "type": "string",
                         "description": "公司代碼（如 2330）"
                     },
-                    "limit": {
+                    "opts.limit": {
                         "type": "integer",
-                        "description": "返回結果數量",
+                        "description": "返回結果數量 (TEJ API parameter)",
                         "default": 50
                     }
                 },
@@ -147,7 +147,7 @@ def migrate_tej_poc_tools():
                 }
             ],
             "paths": {
-                "/TWN/APRCD.json": {
+                "/TRAIL/TAPRCD.json": {
                     "get": {
                         "summary": "取得股票價格資料",
                         "operationId": "getStockPrice",
@@ -254,9 +254,9 @@ def migrate_tej_poc_tools():
                         "type": "string",
                         "description": "結束日期（YYYY-MM-DD）"
                     },
-                    "limit": {
+                    "opts.limit": {
                         "type": "integer",
-                        "description": "返回結果數量",
+                        "description": "返回結果數量 (TEJ API parameter)",
                         "default": 50
                     }
                 },

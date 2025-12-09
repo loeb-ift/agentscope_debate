@@ -476,12 +476,14 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
             
             from datetime import datetime, timedelta
             now = datetime.strptime(CURRENT_DATE, "%Y-%m-%d")
+            current_quarter = (now.month - 1) // 3 + 1
             
             format_vars = {
                 "tools_desc": tools_desc,
                 "stock_codes": chr(10).join([f"- {name}: {code}" for name, code in STOCK_CODES.items()]),
                 "recommended_tools": ', '.join(recommended_tools),
                 "CURRENT_DATE": CURRENT_DATE,
+                "CURRENT_QUARTER": f"{now.year} Q{current_quarter}",
                 "CURRENT_YEAR": now.year,
                 "CURRENT_MONTH": now.month,
                 "NEXT_YEAR": now.year + 1,
@@ -512,26 +514,34 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
                 system_prompt = system_prompt.replace(f"{{{{{key}}}}}", str(value))
         finally:
             db.close()
-        prompt = f"請對以下辯題進行分析：{topic}"
+        prompt = f"請對以下辯題進行分析：{topic}\n\n**務必僅返回有效的 JSON 格式，不要包含 Markdown 標記或其他文字。**"
         
         response = call_llm(prompt, system_prompt=system_prompt)
         
         try:
-            # 使用 Regex 提取 JSON
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                # 嘗試修復常見的 JSON 格式錯誤 (如未轉義的換行符)
-                try:
-                    analysis_result = json.loads(json_str, strict=False)
-                except json.JSONDecodeError:
-                    # 如果 strict=False 仍然失敗，嘗試手動替換換行符
-                    # 這是一個簡單的啟發式替換，將不在引號外的換行符替換為 \n
-                    # 但對於複雜的嵌套 JSON 可能不夠完美
-                    fixed_json_str = json_str.replace('\n', '\\n')
-                    analysis_result = json.loads(fixed_json_str, strict=False)
+            # 嘗試提取 JSON (支援 Markdown code block)
+            json_str = response
+            # 1. 嘗試匹配 ```json ... ``` 或 ``` ... ```
+            code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if code_block_match:
+                json_str = code_block_match.group(1)
             else:
-                raise ValueError("No JSON object found in response")
+                # 2. 嘗試匹配最外層的 { ... }
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+            
+            # 嘗試解析 JSON
+            try:
+                analysis_result = json.loads(json_str, strict=False)
+            except json.JSONDecodeError:
+                # 嘗試修復常見錯誤: 未轉義的換行符
+                fixed_json_str = json_str.replace('\n', '\\n')
+                analysis_result = json.loads(fixed_json_str, strict=False)
+
+            if not isinstance(analysis_result, dict):
+                 raise ValueError("Parsed JSON is not a dictionary")
+
             
             # 為了兼容舊代碼，將 step6_handcard 映射為 step5_summary (因為 debate_cycle.py 使用此 key)
             if "step6_handcard" in analysis_result:
@@ -543,6 +553,22 @@ IF 需要專業權威 → .edu / .gov / 學術期刊
                     summary_parts.append(f"題型：{analysis_result['step1_type_classification']}")
                 elif "step1_type" in analysis_result: # Backward compatibility
                     summary_parts.append(f"題型：{analysis_result['step1_type']}")
+                
+                if "step0_5_region_positioning" in analysis_result:
+                    region_info = analysis_result["step0_5_region_positioning"]
+                    if isinstance(region_info, dict):
+                        region = region_info.get("region", "Unknown")
+                        summary_parts.append(f"區域定位：{region}")
+
+                if "step0_5_industry_identification" in analysis_result:
+                    industry_info = analysis_result["step0_5_industry_identification"]
+                    if isinstance(industry_info, dict):
+                        domain = industry_info.get("industry_domain", "Unknown")
+                        summary_parts.append(f"涉及產業：{domain}")
+                        companies = industry_info.get("leading_companies", [])
+                        if companies and isinstance(companies, list):
+                            company_names = [c.get("name", "") for c in companies if isinstance(c, dict)]
+                            summary_parts.append(f"龍頭企業：{', '.join(company_names)}")
                     
                 if "step2_elements" in analysis_result: # Same key in new prompt? No, new is same step2_core_elements?
                     # Wait, prompt says: step2_core_elements. Old code: step2_elements.

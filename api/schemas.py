@@ -169,6 +169,29 @@ class ToolDescriptionGenerate(BaseModel):
     tool_type: str
     content: str # Code or Schema JSON
 
+class ToolTryRunRequest(BaseModel):
+    """臨時執行工具（不入庫）請求。
+    - 沿用現有自建工具結構，支援 http/api 型別
+    - api_config 與 json_schema 與現有 Tool 結構一致
+    - params 為本次請求的參數（將作為 query 或 json 傳遞）
+    """
+    name: str
+    type: str = "http"  # http/api/python（目前支援 http/api）
+    description: Optional[str] = None
+    version: str = "v1"
+    api_config: Dict[str, Any]
+    json_schema: Optional[Dict[str, Any]] = None
+    params: Dict[str, Any] = {}
+
+class ToolTryRunResponse(BaseModel):
+    """Try-it-out 回應摘要"""
+    ok: bool
+    request: Dict[str, Any]
+    response: Dict[str, Any]
+    preview_rows: List[Dict[str, Any]] = []
+    elapsed_ms: int
+    error: Optional[str] = None
+
 # --- Financial Entity Schemas ---
 
 class CompanyBase(BaseModel):

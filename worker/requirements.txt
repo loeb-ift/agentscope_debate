@@ -10,3 +10,5 @@ duckduckgo-search
 ollama
 yfinance
 PyYAML
+httpx
+tenacity

@@ -8,8 +8,22 @@ db_path = os.getenv('DATABASE_URL', 'sqlite:///./data/debate.db')
 SQLALCHEMY_DATABASE_URL = db_path
 
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    pool_size=10,        # Base number of connections
+    max_overflow=20,     # Max extra connections
+    pool_recycle=1800,   # Recycle connections after 30 mins
+    pool_timeout=30      # Wait 30s for a connection
 )
+
+# Enable WAL mode for better concurrency
+from sqlalchemy import event
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
