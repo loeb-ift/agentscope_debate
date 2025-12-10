@@ -25,8 +25,13 @@ def _get_cached_or_fetch(cache_key, fetch_url, timeout=5):
     cache = _CORE_DATA_CACHE.get(cache_key)
     
     # 如果緩存有效，直接返回
-    if cache and cache["data"] is not None and (now - cache["timestamp"]) < CACHE_TTL:
-        print(f"DEBUG: Using cached {cache_key}", flush=True)  # noqa
+    # Modify: If data is empty list/dict, reduce TTL to 5s to allow quick retry on startup
+    ttl = CACHE_TTL
+    if cache and not cache["data"]: # Empty list/dict or None
+        ttl = 5
+        
+    if cache and cache["data"] is not None and (now - cache["timestamp"]) < ttl:
+        print(f"DEBUG: Using cached {cache_key} (TTL: {ttl}s)", flush=True)  # noqa
         return cache["data"]
     
     # 如果有舊緩存且距離上次失敗不到 10 秒，直接使用舊緩存避免頻繁重試
@@ -923,7 +928,7 @@ def main():
                             )
 
                         step1_next_btn.click(
-                            refresh_dropdowns,
+                            force_refresh_dropdowns,
                             outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
                             show_progress=True
                         ).then(

@@ -40,3 +40,114 @@ debate.history_compression_user: |
 
   新的對話：
   {conversation_text}
+
+debate.hierarchical_summarizer: |
+  你是辯論記錄員。請將以下對話記錄進行「分層摘要」。
+  請保留每位發言者的核心觀點與數據證據，去除客套話。
+
+  輸入格式：
+  [角色]: 內容...
+
+  請輸出 Markdown 列表格式，每條發言一行摘要：
+  - [角色]: 摘要內容...
+
+debater.operational_rules: |
+  **系統操作規範 (Operational Rules)**：
+  1. **工具優先**：必須先使用工具獲取真實數據，再發表論點。
+  2. **精準調用**：仔細閱讀工具 Schema。TEJ 工具必須提供 `coid` (公司代碼)，請參考【重要常數】。
+  3. **時間感知**：工具日期參數 (start_date/end_date) 必須根據問題時間動態計算，不可省略。
+  4. **輸出格式**：調用工具時，必須輸出純 JSON，不要包含 Markdown 代碼塊或其他文字。
+
+debater.tool_instruction: |
+  这是第 {round_num} 輪辯論。
+
+  **辯論歷史摘要**：
+  {history_text}
+
+  **主席戰略摘要**：{chairman_summary}
+
+  **背景資訊**：
+  - 當前日期：{current_date}
+  - 辯題涉及：2024 年 Q4（2024-10-01 至 2024-12-31）
+  - 你需要查詢 2024 年的實際股價數據進行比較
+
+  **重要常數**：
+  {stock_codes}
+
+  **第一步：必須先調用工具獲取數據**
+
+  {tools_desc}
+
+  {tools_examples}
+
+  **請現在就調用工具**（只輸出 JSON，不要其他文字）：
+
+debate.extension_option: |
+  【系統提示】你的基礎工具調用次數 ({base_max_steps} 次) 已用盡。
+
+  請選擇：
+  1. **發表總結**：直接輸出你的最終觀點（純文字）。
+  2. **申請延長**：如果你認為證據嚴重不足，可向主席申請延長調查（最多增加 {extension_steps} 次）。
+     請輸出 JSON：{{"tool": "request_extension", "params": {{"reason": "說明理由..."}}}}
+
+debate.chairman_review_extension: |
+  你是主席。Agent {agent_name} 申請延長調查。
+  理由：{reason}
+  證據摘要：{evidence_summary}
+  請回傳 JSON: {{"approved": true/false, "reason": "...", "guidance": "..."}}
+
+debate.jury_evaluation_user: |
+  請根據以下完整的辯論記錄，生成「最終評估報告」。
+
+  **重要：請使用繁體中文撰寫評估報告。**
+
+  辯題：{topic}
+
+  辯論記錄：
+  {debate_log}
+
+  請按照 System Prompt 的要求，輸出包含評分表與文字分析的報告。
+
+neutral.verification_comparison: |
+  請比較以下兩次工具調用的結果，判斷是否一致，以及原始引用是否準確。
+
+  工具：{tool_name}
+  參數：{params}
+
+  原始結果（由 {provider_side} 方提供）：
+  {original_result_preview}...
+
+  核實結果（由中立方重新執行）：
+  {verify_result_preview}...
+
+  請輸出 JSON：
+  {{
+      "consistent": true/false,
+      "score_penalty": 0 到 -10,
+      "comment": "簡短評語"
+  }}
+
+neutral.verification_speech: |
+  你是中立方辯手 {agent_name}。
+  這是第 {round_num} 輪。
+
+  你的核心任務是擔任「事實查核者」。
+  你剛剛對其他團隊的證據進行了核實，結果如下：
+  {verification_report}
+
+  請基於以上核實結果，發表你的觀點。
+  1. 如果有核實失敗，嚴厲指出並批評。
+  2. 如果數據都可靠，則針對辯題發表中立分析。
+  3. 保持客觀、公正。
+
+chairman.summarize_round_user: |
+  本輪收集到的證據與發言摘要：
+  {evidence_text}
+
+  請進行總結：
+
+chairman.summarize_debate_user: |
+  整場辯論記錄摘要：
+  {summary_text}
+
+  請進行最終總結：

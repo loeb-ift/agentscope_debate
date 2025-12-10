@@ -3,13 +3,16 @@ import requests
 import json
 import asyncio
 import httpx
+import time
 from typing import List, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from api.vector_store import VectorStore
+from api.config import Config
 
 # Configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
-MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENCY", "5"))
+OLLAMA_HOST = Config.OLLAMA_HOST
+OLLAMA_MODEL = Config.OLLAMA_MODEL
+MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENCY", "5")) # Keep env for concurrency for now
 REQUEST_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
 
 # Global Semaphore
@@ -96,7 +99,11 @@ def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
 
         if not content:
              print(f"WARNING: LLM returned empty content. Full result: {result}")
-             
+        
+        # Sync version doesn't support async semantic cache storage easily without a loop.
+        # Skipping cache storage for sync call to avoid complexity.
+        pass
+
         return content
     except Exception as e:
         print(f"Error calling LLM (Sync): {e}")
@@ -107,12 +114,58 @@ def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError))
 )
-async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None) -> str:
+async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None, context_tag: str = None) -> str:
     """
     Async Call the LLM (Ollama) with throttling and retries.
+    Includes Semantic Caching via Qdrant.
+    
+    Args:
+        context_tag: Optional tag (e.g. debate_id) to scope the semantic cache.
     """
     if not model:
         model = OLLAMA_MODEL
+
+    # --- Semantic Cache Lookup ---
+    cache_query = f"System: {system_prompt}\nUser: {prompt}"
+    try:
+        # Construct filter if context_tag is provided
+        filter_cond = None
+        if context_tag:
+            filter_cond = {"context": context_tag}
+
+        # Note: Ideally we want a similarity score threshold (e.g. > 0.95).
+        # VectorStore.search returns payloads of top-k matches.
+        # We blindly trust the top 1 match for now as a POC.
+        # Real production usage requires modifying VectorStore to return scores.
+        cached_results = await VectorStore.search(
+            collection_name="llm_semantic_cache",
+            query=cache_query,
+            limit=1,
+            filter_conditions=filter_cond
+        )
+        
+        if cached_results and len(cached_results) > 0:
+             entry = cached_results[0]
+             
+             # Check TTL
+             timestamp = entry.get('timestamp')
+             ttl = getattr(Config, 'SEMANTIC_CACHE_TTL', 86400) # Default 24h
+             
+             is_valid = True
+             if timestamp:
+                 if time.time() - timestamp > ttl:
+                     print(f"DEBUG: Semantic Cache Hit but EXPIRED (Age: {time.time() - timestamp:.2f}s > {ttl}s)")
+                     is_valid = False
+             
+             if is_valid:
+                 cached_resp = entry.get('response')
+                 if cached_resp:
+                     print("DEBUG: Semantic Cache Hit")
+                     return cached_resp
+                     
+    except Exception as e:
+        print(f"Cache lookup failed: {e}")
+    # -----------------------------
 
     url = f"{OLLAMA_HOST}/api/chat"
     
@@ -144,7 +197,28 @@ async def call_llm_async(prompt: str, system_prompt: str = None, model: str = No
 
                 if not content:
                      print(f"WARNING: LLM returned empty content. Full result: {result}")
-                     
+                
+                # --- Store in Semantic Cache (Async) ---
+                if content:
+                    try:
+                        # Store prompt as text, response as metadata
+                        metadata = {
+                            "response": content, 
+                            "model": model,
+                            "timestamp": time.time()
+                        }
+                        if context_tag:
+                            metadata["context"] = context_tag
+                            
+                        await VectorStore.add_texts(
+                            collection_name="llm_semantic_cache",
+                            texts=[cache_query],
+                            metadatas=[metadata]
+                        )
+                    except Exception as e:
+                        print(f"Failed to update cache: {e}")
+                # ---------------------------------------
+
                 return content
             except Exception as e:
                 print(f"Error calling LLM (Async): {e}")

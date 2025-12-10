@@ -113,7 +113,18 @@ class ToolRegistry:
         """
         tool_id = f"{tool_name}:{version}"
         if tool_id not in self._tools:
-            raise ValueError(f"Tool '{tool_id}' not found")
+            # Enhanced Error Logging
+            import difflib
+            all_keys = list(self._tools.keys())
+            suggestions = difflib.get_close_matches(tool_id, all_keys, n=3, cutoff=0.4)
+            msg = f"Tool '{tool_id}' not found."
+            if suggestions:
+                msg += f" Did you mean: {', '.join(suggestions)}?"
+            else:
+                msg += f" Available tools count: {len(all_keys)}. (Check spelling or registry)"
+            
+            print(f"❌ Registry Lookup Failed: {msg}")
+            raise ValueError(msg)
             
         self._ensure_loaded(tool_id)
         return self._tools[tool_id]
@@ -265,8 +276,12 @@ class ToolRegistry:
                 error_message = error_mapping.get(type(e).__name__)
                 if error_message:
                     return {"error": error_message}
+            print(f"❌ Tool Execution Runtime Error ({tool_id}): {e}")
             return {"error": str(e)}
         except Exception as e:
+             import traceback
+             print(f"❌ Tool Execution Unexpected Error ({tool_id}): {e}")
+             traceback.print_exc()
              return {"error": f"Unexpected error: {str(e)}"}
 
         # 4.5 TEJ 回傳標準化

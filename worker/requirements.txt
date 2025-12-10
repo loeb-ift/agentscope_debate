@@ -12,3 +12,4 @@ yfinance
 PyYAML
 httpx
 tenacity
+qdrant-client

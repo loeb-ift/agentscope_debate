@@ -243,7 +243,13 @@ def initialize_default_agents(db: Session):
                 for item in items:
                     if not item.get('name'): continue
                     
-                    if db.query(models.Agent).filter(models.Agent.name == item['name']).first():
+                    existing_agent = db.query(models.Agent).filter(models.Agent.name == item['name']).first()
+                    if existing_agent:
+                        # Update existing agent's prompt to ensure file changes are reflected
+                        if existing_agent.system_prompt != item['system_prompt']:
+                            print(f"Updating system prompt for agent: {item['name']}")
+                            existing_agent.system_prompt = item['system_prompt']
+                            agents_created.append(existing_agent) # Reuse list for commit trigger
                         continue
 
                     new_agent = models.Agent(
@@ -261,7 +267,7 @@ def initialize_default_agents(db: Session):
     if agents_created:
         try:
             db.commit()
-            print(f"Created {len(agents_created)} default agents from files.")
+            print(f"Created/Updated {len(agents_created)} agents from files.")
         except Exception as e:
             print(f"Error committing agents: {e}")
             db.rollback()

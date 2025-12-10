@@ -13,3 +13,4 @@ PyYAML
 tenacity
 httpx
 requests
+qdrant-client

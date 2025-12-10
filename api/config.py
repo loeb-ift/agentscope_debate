@@ -9,19 +9,31 @@ class Config:
     MAX_MEMBERS_PER_TEAM = int(os.getenv("MAX_MEMBERS_PER_TEAM", 2))
     MAX_AGENT_TOOL_STEPS = int(os.getenv("MAX_AGENT_TOOL_STEPS", 5))
     EXTENSION_STEPS = int(os.getenv("EXTENSION_STEPS", 3))
+    SEMANTIC_CACHE_TTL = int(os.getenv("SEMANTIC_CACHE_TTL", 86400)) # Default 24 hours
     
     # System Configuration
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/debate.db")
     REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+    OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+    
+    # Embedding Configuration (Separated)
+    OLLAMA_EMBEDDING_HOST = os.getenv("OLLAMA_EMBEDDING_HOST", "http://ollama:11434") # Generic default
+    OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest") # Generic default
 
     # Metadata for UI
     CONFIG_DESCRIPTIONS = {
         "OLLAMA_HOST": "LLM 服務器地址 (例如 http://10.x.x.x:11434)",
         "OLLAMA_MODEL": "使用的 LLM 模型名稱 (例如 gpt-oss:20b)",
+        "OLLAMA_EMBEDDING_HOST": "Embedding 服務器地址 (獨立設定)",
+        "OLLAMA_EMBEDDING_MODEL": "Embedding 模型名稱 (例如 xitao/bge-reranker-v2-m3:latest)",
+        "QDRANT_URL": "Qdrant 向量資料庫地址",
         "MAX_TEAMS_PER_DEBATE": "每場辯論的最大團隊數",
         "MAX_MEMBERS_PER_TEAM": "每個團隊的最大成員數",
         "MAX_AGENT_TOOL_STEPS": "Agent 單回合最大工具調用次數 (基礎)",
         "EXTENSION_STEPS": "Agent 申請延長調查時增加的次數",
+        "SEMANTIC_CACHE_TTL": "語意快取存活時間 (秒)",
         "GOOGLE_SEARCH_API_KEY": "Google Custom Search API Key",
         "GOOGLE_CSE_ID": "Google Custom Search Engine ID",
         "BRAVE_SEARCH_API_KEY": "Brave Search API Key",

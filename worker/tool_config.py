@@ -60,9 +60,10 @@ def get_tools_examples() -> str:
     """
     # 這裡為了簡化，手動定義一些核心範例，或者也可以讓 ToolAdapter 提供 example
     examples = "**核心工具調用範例**：\n"
-    examples += '1. 搜尋: {"tool": "searxng.search", "params": {"q": "台積電 2024 Q4 營收"}}\n'
-    examples += '2. 股價: {"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01"}}\n'
-    examples += '3. 財報: {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
+    examples += '1. 查找公司代號: {"tool": "internal.search_company", "params": {"keyword": "台積電"}}\n'
+    examples += '2. 搜尋新聞: {"tool": "searxng.search", "params": {"q": "台積電 2024 Q4 營收"}}\n'
+    examples += '3. 查詢股價: {"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01"}}\n'
+    examples += '4. 查詢財報: {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
     
     return examples
 
@@ -72,13 +73,16 @@ def get_recommended_tools_for_topic(topic: str) -> list:
     """
     topic_lower = topic.lower()
     
+    # 推薦工具列表
+    tools = ["searxng.search", "internal.search_company", "internal.get_company_details"]
+    
     # 台股相關
-    if any(keyword in topic for keyword in ["台積電", "股價", "大盤", "台股", "2330"]):
-        return ["tej.stock_price", "tej.company_info", "tej.monthly_revenue", "tej.institutional_holdings"]
+    if any(keyword in topic for keyword in ["台積電", "股價", "大盤", "台股", "2330", "上市", "上櫃"]):
+        tools.extend(["tej.stock_price", "tej.company_info", "tej.monthly_revenue", "tej.institutional_holdings"])
     
     # 財務相關
-    if any(keyword in topic for keyword in ["營收", "獲利", "EPS", "財報"]):
-        return ["tej.financial_summary", "tej.monthly_revenue"]
+    if any(keyword in topic for keyword in ["營收", "獲利", "EPS", "財報", "月增", "年增"]):
+        tools.extend(["tej.financial_summary", "tej.monthly_revenue", "tej.financial_summary_quarterly"])
     
-    # 預設
-    return ["searxng.search"]
+    # 去重並返回
+    return list(dict.fromkeys(tools))

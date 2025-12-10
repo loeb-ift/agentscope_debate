@@ -68,9 +68,11 @@ class GetCompanyDetails(DatabaseToolBase):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "string", "description": "公司 ID"}
+                "company_id": {"type": "string", "description": "公司 ID (Primary)"},
+                "id": {"type": "string", "description": "Alias for company_id"},
+                "coid": {"type": "string", "description": "Alias for company_id (TEJ style)"}
             },
-            "required": ["company_id"]
+            "required": []
         }
 
     def describe(self) -> Dict[str, Any]:
@@ -82,12 +84,17 @@ class GetCompanyDetails(DatabaseToolBase):
         }
 
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
-        company_id = kwargs.get("company_id")
+        # Support aliases
+        company_id = kwargs.get("company_id") or kwargs.get("id") or kwargs.get("coid")
+        
+        if not company_id:
+            return {"error": "Missing required parameter: company_id (or id/coid)"}
+
         db = self.get_db()
         try:
             company = db.query(financial_models.Company).filter(financial_models.Company.company_id == company_id).first()
             if not company:
-                return {"error": "Company not found"}
+                return {"error": f"Company not found with ID: {company_id}"}
             
             # Serialize simple object
             data = {c.name: getattr(company, c.name) for c in company.__table__.columns}

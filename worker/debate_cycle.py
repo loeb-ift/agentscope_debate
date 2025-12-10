@@ -14,10 +14,11 @@ from worker.llm_utils import call_llm, call_llm_async
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
 from api.database import SessionLocal
-from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory
+from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory, ReMeHistoryMemory
 from api.tool_registry import tool_registry
 from api.toolset_service import ToolSetService
 from api.redis_client import get_redis_client
+from api import models
 
 class DebateCycle:
     """
@@ -36,7 +37,8 @@ class DebateCycle:
         self.analysis_result = {}
         self.history = []
         self.full_history = []  # 完整歷史記錄（不壓縮，用於報告）
-        self.compressed_history = "無"  # 存儲 LLM 壓縮後的歷史摘要
+        self.compressed_history = "無"  # 存儲 LLM 壓縮後的歷史摘要 (Legacy)
+        self.archived_summaries = [] # List of structured summaries
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
 
     def _get_memory_usage(self) -> str:
@@ -138,11 +140,12 @@ class DebateCycle:
         
         # 0. 賽前分析
         # Check Task LTM for similar past debates
-        with ReMeTaskLongTermMemory() as task_mem:
-            similar_tasks = task_mem.retrieve_similar_tasks(self.topic)
-            if similar_tasks:
-                print(f"DEBUG: Found similar past debates:\n{similar_tasks}")
-                self._publish_log("System", f"Found similar past debates:\n{similar_tasks}")
+        # [OPTIONAL] Disabled to avoid cold-start issues if not required
+        # task_mem = ReMeTaskLongTermMemory()
+        # similar_tasks = await task_mem.retrieve_similar_tasks_async(self.topic)
+        # if similar_tasks:
+        #     print(f"DEBUG: Found similar past debates:\n{similar_tasks}")
+        #     self._publish_log("System", f"Found similar past debates:\n{similar_tasks}")
 
         self._publish_progress(10, "主席正在進行賽前分析...", "analysis")
         
@@ -194,8 +197,9 @@ class DebateCycle:
         jury_report = self._run_jury_evaluation(final_conclusion)
 
         # Record outcome to Task LTM
-        with ReMeTaskLongTermMemory() as task_mem:
-            task_mem.record(self.topic, final_conclusion)
+        # [OPTIONAL] Disabled as debates are independent and history is not required
+        # task_mem = ReMeTaskLongTermMemory()
+        # await task_mem.record_async(self.topic, final_conclusion)
         
         end_time = datetime.now()
         # Save to File (Markdown Report)
@@ -204,6 +208,17 @@ class DebateCycle:
         print(f"Debate '{self.debate_id}' has ended.")
         self._publish_log("System", f"Debate '{self.debate_id}' has ended.")
         
+        # [CLEANUP] Clear Semantic Cache for this debate
+        try:
+            from api.vector_store import VectorStore
+            await VectorStore.delete_by_filter(
+                collection_name="llm_semantic_cache",
+                filter_conditions={"context": self.debate_id}
+            )
+            print(f"DEBUG: Cleared semantic cache for debate {self.debate_id}")
+        except Exception as e:
+            print(f"WARNING: Failed to clear semantic cache: {e}")
+
         # Send explicit DONE signal to close the stream
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", "[DONE]")
         
@@ -223,7 +238,7 @@ class DebateCycle:
         self._publish_log("System", "評審團正在進行最終評估...")
 
         try:
-            # Load Jury System Prompt (Priority: PromptService -> File -> Default)
+            # Load Jury System Prompt
             file_system_prompt = "你是辯論評審團。"
             try:
                 with open("prompts/agents/jury.yaml", "r", encoding="utf-8") as f:
@@ -235,6 +250,11 @@ class DebateCycle:
             db = SessionLocal()
             try:
                 system_prompt = PromptService.get_prompt(db, "jury.system_prompt", default=file_system_prompt)
+                
+                # Load User Prompt Template (Moved from hardcoded)
+                user_template = PromptService.get_prompt(db, "debate.jury_evaluation_user")
+                if not user_template:
+                    user_template = "請評估以下辯論：\n{debate_log}" # Minimal fallback
             finally:
                 db.close()
             
@@ -247,20 +267,17 @@ class DebateCycle:
                 
             debate_log += f"[Chairman Final Conclusion]: {final_conclusion}\n"
 
-            user_prompt = f"""
-請根據以下完整的辯論記錄，生成「最終評估報告」。
+            # Fill template
+            user_prompt = user_template.format(topic=self.topic, debate_log=debate_log)
 
-**重要：請使用繁體中文撰寫評估報告。**
-
-辯題：{self.topic}
-
-辯論記錄：
-{debate_log}
-
-請按照 System Prompt 的要求，輸出包含評分表與文字分析的報告。
-"""
             # Call LLM
             jury_report = call_llm(user_prompt, system_prompt=system_prompt)
+            # Note: Sync call_llm doesn't support context_tag yet, but jury uses sync wrapper?
+            # Wait, `call_llm` is sync. `_run_jury_evaluation` uses `call_llm` (sync).
+            # The async `call_llm_async` supports context_tag.
+            # I should update `call_llm` (sync) to support context_tag?
+            # Or just update the async calls.
+            # `_run_jury_evaluation` is SYNC method.
             
             self._publish_log("Jury", jury_report)
             print("Jury evaluation completed.")
@@ -331,31 +348,25 @@ class DebateCycle:
                 loop = asyncio.get_running_loop()
                 verify_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
                 
-                # Simple comparison (Equality check might be too strict for some dynamic data, but good for now)
-                # Ideally, we ask LLM to compare.
-                
-                # Construct verification prompt
-                comparison_prompt = f"""
-請比較以下兩次工具調用的結果，判斷是否一致，以及原始引用是否準確。
+                # Construct verification prompt via PromptService
+                db = SessionLocal()
+                try:
+                    comp_template = PromptService.get_prompt(db, "neutral.verification_comparison")
+                    if not comp_template:
+                        comp_template = "請比較：\n原：{original_result_preview}\n新：{verify_result_preview}\nJSON: {{consistent: bool}}"
+                finally:
+                    db.close()
 
-工具：{tool_name}
-參數：{params}
+                comparison_prompt = comp_template.format(
+                    tool_name=tool_name,
+                    params=params,
+                    provider_side=provider_side,
+                    original_result_preview=str(original_result)[:1000],
+                    verify_result_preview=str(verify_result)[:1000]
+                )
 
-原始結果（由 {provider_side} 方提供）：
-{str(original_result)[:1000]}...
-
-核實結果（由中立方重新執行）：
-{str(verify_result)[:1000]}...
-
-請輸出 JSON：
-{{
-    "consistent": true/false,
-    "score_penalty": 0 到 -10,
-    "comment": "簡短評語"
-}}
-"""
                 # Call LLM for judgement
-                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。")
+                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。", context_tag=self.debate_id)
                 
                 # Parse JSON
                 try:
@@ -385,20 +396,21 @@ class DebateCycle:
                 verification_report += f"- ⚠️ 工具重跑失敗 ({tool_name}): {e}\n"
 
         # 3. Generate Speech based on verification
-        final_prompt = f"""
-你是中立方辯手 {agent.name}。
-這是第 {round_num} 輪。
+        db = SessionLocal()
+        try:
+            final_template = PromptService.get_prompt(db, "neutral.verification_speech")
+            if not final_template:
+                final_template = "你是中立方。請根據核實報告發言：{verification_report}"
+        finally:
+            db.close()
 
-你的核心任務是擔任「事實查核者」。
-你剛剛對其他團隊的證據進行了核實，結果如下：
-{verification_report}
-
-請基於以上核實結果，發表你的觀點。
-1. 如果有核實失敗，嚴厲指出並批評。
-2. 如果數據都可靠，則針對辯題發表中立分析。
-3. 保持客觀、公正。
-"""
-        response = await call_llm_async(final_prompt, system_prompt=f"你是 {agent.name}，公正的第三方。")
+        final_prompt = final_template.format(
+            agent_name=agent.name,
+            round_num=round_num,
+            verification_report=verification_report
+        )
+        
+        response = await call_llm_async(final_prompt, system_prompt=f"你是 {agent.name}，公正的第三方。", context_tag=self.debate_id)
         return response
 
     def _run_round(self, round_num: int) -> Dict[str, Any]:
@@ -444,9 +456,15 @@ class DebateCycle:
             for item in discussion_log:
                  self.history.append(item)
                  self.full_history.append(item)
+                 # RAG Recording
+                 rag = ReMeHistoryMemory(self.debate_id)
+                 await rag.add_turn_async(item['role'], str(item['content']), round_num)
             
             self.history.append({"role": f"{team_name} Summary", "content": team_summary})
             self.full_history.append({"role": f"{team_name} Summary", "content": team_summary})
+            
+            rag = ReMeHistoryMemory(self.debate_id)
+            await rag.add_turn_async(f"{team_name} Summary", team_summary, round_num)
             
         # 3. 主席彙整與下一輪方向
         handcard = self.analysis_result.get('step6_handcard') or self.analysis_result.get('step5_summary', '無手卡')
@@ -534,17 +552,17 @@ class DebateCycle:
         
         db = SessionLocal()
         try:
-            default_system = "你是 {team_name} 的記錄員。請根據團隊成員的發言，總結本輪討論的「共同觀點」與「內部分歧」。"
-            sys_template = PromptService.get_prompt(db, "debate.team_summary_system", default=default_system)
+            sys_template = PromptService.get_prompt(db, "debate.team_summary_system")
+            if not sys_template: sys_template = "Summarize team discussion."
             system_prompt = sys_template.format(team_name=team_name)
 
-            default_user = "討論記錄：\n{discussion_text}\n\n請輸出總結："
-            user_template = PromptService.get_prompt(db, "debate.team_summary_user", default=default_user)
+            user_template = PromptService.get_prompt(db, "debate.team_summary_user")
+            if not user_template: user_template = "{discussion_text}"
             user_prompt = user_template.format(discussion_text=discussion_text)
         finally:
             db.close()
             
-        return await call_llm_async(user_prompt, system_prompt=system_prompt)
+        return await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
 
     def _agent_select_tools(self, agent: AgentBase, side: str):
          """Sync wrapper for backward compatibility"""
@@ -580,28 +598,19 @@ class DebateCycle:
         # DB session for prompt
         db = SessionLocal()
         try:
-            default_system = "你是 {agent_name}，即將代表{side}參加關於「{topic}」的辯論。你的任務是從可用工具庫中選擇對你最有幫助的工具。"
-            sys_template = PromptService.get_prompt(db, "debate.tool_selection_system", default=default_system)
+            sys_template = PromptService.get_prompt(db, "debate.tool_selection_system")
+            if not sys_template: sys_template = "You are {agent_name}."
             system_prompt = sys_template.format(agent_name=agent.name, side=side, topic=self.topic)
 
-            default_user = """
-可用工具列表：
-{tools_list_text}
-
-請分析辯題與你的立場，選擇 3-5 個最關鍵的工具。
-**重要：** 請仔細查看每個工具描述中的 **Schema**，選擇那些輸入/輸出欄位最符合你數據需求的工具。不要僅憑工具名稱猜測功能。
-
-請直接返回工具名稱的 JSON 列表，例如：["searxng.search", "tej.stock_price"]
-不要輸出其他文字。
-"""
-            user_template = PromptService.get_prompt(db, "debate.tool_selection_user", default=default_user)
+            user_template = PromptService.get_prompt(db, "debate.tool_selection_user")
+            if not user_template: user_template = "Select tools: {tools_list_text}"
             user_prompt = user_template.format(tools_list_text=tools_list_text)
         finally:
             db.close()
 
         try:
             # Async LLM Call
-            response = await call_llm_async(user_prompt, system_prompt=system_prompt)
+            response = await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
             
             # 嘗試解析 JSON (支援 List 或 Dict 格式)
             selected_tools = []
@@ -641,12 +650,13 @@ class DebateCycle:
             self.agent_tools_map[agent.name] = []
             self._publish_log(f"{agent.name} (Setup)", f"❌ 工具選擇錯誤: {str(e)}")
 
-    def _compress_history(self):
+    def _summarize_old_turns(self):
         """
-        使用 LLM 壓縮舊的辯論歷史 (Compression 策略)。
+        分層摘要 (Hierarchical Summarization)：
+        將舊的對話歷史進行結構化摘要，保留每個角色的核心觀點。
         """
-        keep_recent = 3
-        # 只有當累積的歷史訊息超過一定數量時才觸發壓縮
+        keep_recent = 5 # 保留最近 5 條 (增加上下文)
+        
         if len(self.history) <= keep_recent + 2:
             return
 
@@ -655,48 +665,57 @@ class DebateCycle:
         # 更新 self.history，只保留最近的訊息
         self.history = self.history[-keep_recent:]
         
-        # 構建壓縮 Prompt
-        conversation_text = "\n".join([f"{item.get('role')}: {str(item.get('content'))[:500]}" for item in to_compress])
+        # 構建待摘要文本
+        conversation_text = ""
+        for item in to_compress:
+            role = item.get('role')
+            content = str(item.get('content'))
+            if len(content) > 500:
+                content = content[:500] + "..."
+            conversation_text += f"[{role}]: {content}\n\n"
         
         db = SessionLocal()
         try:
-            default_system = "你是辯論記錄員。你的任務是將對話歷史壓縮成簡練的摘要，保留關鍵論點和數據，去除冗餘內容。"
-            sys_template = PromptService.get_prompt(db, "debate.history_compression_system", default=default_system)
-            system_prompt = sys_template
-
-            default_user = "請壓縮以下對話歷史（接續之前的摘要）：\n\n之前的摘要：{compressed_history}\n\n新的對話：\n{conversation_text}"
-            user_template = PromptService.get_prompt(db, "debate.history_compression_user", default=default_user)
-            user_prompt = user_template.format(compressed_history=self.compressed_history, conversation_text=conversation_text)
+            template = PromptService.get_prompt(db, "debate.hierarchical_summarizer")
+            if not template: template = "Summarize: {conversation_text}"
+            system_prompt = template
+            user_prompt = f"請摘要以下對話：\n\n{conversation_text}"
         finally:
             db.close()
         
         try:
             summary = call_llm(user_prompt, system_prompt=system_prompt)
             if summary:
-                self.compressed_history = summary
-                print(f"DEBUG: History compressed. New summary length: {len(summary)}")
-                self._publish_log("System", "已對舊的辯論歷史進行壓縮處理。")
+                self.archived_summaries.append(summary)
+                print(f"DEBUG: Hierarchical summary generated. Length: {len(summary)}")
+                self._publish_log("System", "已對舊的辯論歷史進行分層摘要處理。")
         except Exception as e:
-            print(f"WARNING: History compression failed: {e}")
+            print(f"WARNING: Hierarchical summarization failed: {e}")
+            # Fallback: Just append raw text truncated if summary fails?
+            # Or just keep it in history? No, that would lose data or explode context.
+            # Let's append a placeholder.
+            self.archived_summaries.append(f"(摘要失敗: {str(e)})")
 
     def _get_compact_history(self, max_length=2000) -> str:
         """
-        獲取優化後的辯論歷史 (ReMe 策略：Compression + Smart Retention)
+        獲取優化後的辯論歷史 (Hierarchical Summary + Recent History)
         """
-        # 1. 嘗試觸發壓縮 (Compression)
-        self._compress_history()
+        # 1. 嘗試觸發摘要
+        self._summarize_old_turns()
         
-        # 2. 構建近期完整歷史 (Smart Retention)
-        active_history_text = ""
+        # 2. 組合歷史
+        # A. 結構化摘要區
+        archived_text = "【過往辯論摘要】\n" + "\n".join(self.archived_summaries)
+        
+        # B. 近期對話區
+        active_history_text = "【近期對話】\n"
         for item in self.history:
             content = item.get("content", "")
-            # 對於近期的 Tool Output，如果太長也進行簡單截斷 (Compaction)
             if len(content) > 800:
                 content = content[:300] + "...(略)..." + content[-300:]
             active_history_text += f"{item.get('role')}: {content}\n\n"
         
-        full_text = f"【早期辯論摘要】：\n{self.compressed_history}\n\n【近期對話】：\n{active_history_text}"
-        return full_text
+        return f"{archived_text}\n\n{active_history_text}"
 
     def _agent_turn(self, agent: AgentBase, side: str, round_num: int) -> str:
         return asyncio.run(self._agent_turn_async(agent, side, round_num))
@@ -742,26 +761,32 @@ class DebateCycle:
         
         # Retrieve Tool LTM hints
         tool_hints = ""
-        with ReMeToolLongTermMemory() as tool_mem:
-            tool_hints = tool_mem.retrieve(self.topic) # Use topic as context for now
-            if tool_hints:
-                tools_examples += f"\n\n**過往成功工具調用參考 (ReMe Tool LTM)**:\n{tool_hints}"
+        tool_mem = ReMeToolLongTermMemory()
+        tool_hints = await tool_mem.retrieve_async(self.topic) # Use topic as context for now
+        if tool_hints:
+            tools_examples += f"\n\n**過往成功工具調用參考 (ReMe Tool LTM)**:\n{tool_hints}"
+
+        # Retrieve RAG Context (Relevant History)
+        rag_context = ""
+        rag = ReMeHistoryMemory(self.debate_id)
+        # Use current agent role and topic as query
+        query = f"{agent.name} {side} {self.topic}"
+        relevant_turns = await rag.retrieve_async(query, top_k=2)
+        if relevant_turns:
+            rag_context = "\n".join([f"> [{t['role']} (Round {t['round']})]: {str(t['content'])[:200]}..." for t in relevant_turns])
 
         history_text = self._get_compact_history()
+        if rag_context:
+            history_text += f"\n\n【相關歷史回顧 (RAG)】\n{rag_context}"
         
         db = SessionLocal()
         try:
             # 1. System Prompt Construction
             # Strategy: Combine Agent's Custom Persona with System's Operational Rules
             
-            # A. Operational Rules (Mandatory)
-            operational_rules = """
-**系統操作規範 (Operational Rules)**：
-1. **工具優先**：必須先使用工具獲取真實數據，再發表論點。
-2. **精準調用**：仔細閱讀工具 Schema。TEJ 工具必須提供 `coid` (公司代碼)，請參考【重要常數】。
-3. **時間感知**：工具日期參數 (start_date/end_date) 必須根據問題時間動態計算，不可省略。
-4. **輸出格式**：調用工具時，必須輸出純 JSON，不要包含 Markdown 代碼塊或其他文字。
-"""
+            # A. Operational Rules (Externalized)
+            operational_rules = PromptService.get_prompt(db, "debater.operational_rules")
+            if not operational_rules: operational_rules = "System Rules: Use tools first."
             
             # B. Agent Persona (Custom or Default)
             custom_prompt = getattr(agent, 'system_prompt', '').strip()
@@ -784,37 +809,12 @@ class DebateCycle:
             default_system = f"{persona_section}\n{operational_rules}"
             
             # Try to get override from DB, but prioritize constructing it dynamically if not found
-            # Note: We don't use PromptService here for the full prompt to avoid losing the dynamic custom_prompt.
-            # However, if we want to allow DB overrides of the *structure*, we could.
-            # For now, let's stick to the dynamic construction to ensure custom prompts work.
             system_prompt = default_system
             
             # 2. User Prompt (Tool Instruction)
-            default_user = """
-这是第 {round_num} 輪辯論。
-
-**辯論歷史摘要**：
-{history_text}
-
-**主席戰略摘要**：{chairman_summary}
-
-**背景資訊**：
-- 當前日期：{current_date}
-- 辯題涉及：2024 年 Q4（2024-10-01 至 2024-12-31）
-- 你需要查詢 2024 年的實際股價數據進行比較
-
-**重要常數**：
-{stock_codes}
-
-**第一步：必須先調用工具獲取數據**
-
-{tools_desc}
-
-{tools_examples}
-
-**請現在就調用工具**（只輸出 JSON，不要其他文字）：
-"""
-            user_template = PromptService.get_prompt(db, "debater.tool_instruction", default=default_user)
+            user_template = PromptService.get_prompt(db, "debater.tool_instruction")
+            if not user_template: user_template = "Instructions: {history_text} {tools_desc}"
+            
             user_prompt = user_template.format(
                 round_num=round_num,
                 history_text=history_text,
@@ -842,14 +842,14 @@ class DebateCycle:
                 current_step += 1
                 
                 # Async LLM Call
-                response = await call_llm_async(current_prompt, system_prompt=system_prompt)
+                response = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
                 print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
                 # Retry 機制 (Only for empty response on first step)
                 if not response and current_step == 1:
                     print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
                     retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
-                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt)
+                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
                 
                 # Check for tool call
                 try:
@@ -901,6 +901,27 @@ class DebateCycle:
                             return await self._agent_turn_async(agent, side, round_num)
                         
                         # --- Regular Tool Execution ---
+                        
+                        # [STRICT TOOL VALIDATION]
+                        # Check if the tool is in the equipped list for this agent
+                        equipped_tools = self.agent_tools_map.get(agent.name, [])
+                        if tool_name not in equipped_tools:
+                            # Bypass validation for special meta-tools if needed, but currently only reset_equipped_tools/call_chairman are meta-tools handled above.
+                            # So this block is for regular tools.
+                            print(f"❌ Blocked: Agent {agent.name} tried to call unequipped tool: {tool_name}")
+                            
+                            error_msg = f"Error: Tool '{tool_name}' is not in your equipped list. You can only use: {equipped_tools}. Use 'reset_equipped_tools' if you need to switch toolsets."
+                            
+                            # Log failure
+                            self._publish_log(f"{agent.name} (System)", f"⛔ 拒絕執行：工具 {tool_name} 未裝備")
+                            
+                            # Append to evidence for context
+                            collected_evidence.append(f"【系統錯誤】調用失敗：{error_msg}")
+                            
+                            # Return error to LLM to correct itself
+                            current_prompt = f"系統錯誤：{error_msg}\n請重新選擇有效的工具或發表言論。"
+                            continue
+
                         print(f"✓ Agent {agent.name} calling {tool_name}")
                         self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
                         
@@ -911,6 +932,19 @@ class DebateCycle:
                             
                             self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
                             
+                            # Record successful tool usage to Tool LTM
+                            try:
+                                tool_mem = ReMeToolLongTermMemory()
+                                await tool_mem.record_async(
+                                    intent=f"Debate on {self.topic}",
+                                    tool_name=tool_name,
+                                    params=params,
+                                    result=tool_result,
+                                    success=True
+                                )
+                            except Exception as e:
+                                print(f"Warning: Failed to record tool usage to LTM: {e}")
+
                             # Record Evidence
                             evidence_entry = {
                                 "role": f"{agent.name} ({side})",
@@ -967,6 +1001,20 @@ class DebateCycle:
                             
                             tool_result = {"error": f"Tool execution error: {error_msg}"}
                             print(f"ERROR: Tool {tool_name} failed: {error_msg}")
+
+                            # Record failed tool usage
+                            try:
+                                tool_mem = ReMeToolLongTermMemory()
+                                await tool_mem.record_async(
+                                    intent=f"Debate on {self.topic}",
+                                    tool_name=tool_name,
+                                    params=params,
+                                    result=str(e),
+                                    success=False
+                                )
+                            except Exception as ex:
+                                print(f"Warning: Failed to record tool failure to LTM: {ex}")
+
                             collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {error_msg}")
                         
                         # Update prompt with tool result for NEXT step
@@ -1000,16 +1048,17 @@ class DebateCycle:
                 print(f"INFO: Agent {agent.name} reached base limit. Offering extension.")
                 self._publish_log(f"{agent.name} (System)", "⚠️ 基礎調查次數已用盡。正在詢問是否需要延長調查...")
                 
-                extension_option_prompt = f"""
-【系統提示】你的基礎工具調用次數 ({base_max_steps} 次) 已用盡。
+                # Externalized Prompt
+                db = SessionLocal()
+                try:
+                    ext_template = PromptService.get_prompt(db, "debate.extension_option")
+                    if not ext_template: ext_template = "Max steps reached. 1. Conclude. 2. Extend."
+                    extension_option_prompt = ext_template.format(base_max_steps=base_max_steps, extension_steps=extension_steps)
+                finally:
+                    db.close()
 
-請選擇：
-1. **發表總結**：直接輸出你的最終觀點（純文字）。
-2. **申請延長**：如果你認為證據嚴重不足，可向主席申請延長調查（最多增加 {extension_steps} 次）。
-   請輸出 JSON：{{"tool": "request_extension", "params": {{"reason": "說明理由..."}}}}
-"""
                 # Ask Agent
-                decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt)
+                decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
                 
                 # Check for extension request
                 json_match = re.search(r'\{.*\}', decision_response, re.DOTALL)
@@ -1042,7 +1091,7 @@ class DebateCycle:
                             finally:
                                 db.close()
                                 
-                            chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys)
+                            chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys, context_tag=self.debate_id)
                             
                             # Parse Chairman Decision
                             try:
@@ -1061,7 +1110,7 @@ class DebateCycle:
                                     # Fall through to forced summary (or return text if agent replies text next time)
                                     # Actually, we should force summary NOW or give one last chance?
                                     # Let's give one last chance with text-only constraint.
-                                    final_res = await call_llm_async(current_prompt, system_prompt=system_prompt)
+                                    final_res = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
                                     return final_res
                                     
                             except Exception as e:
