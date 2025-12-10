@@ -38,9 +38,14 @@ class PromptService:
             cls.load_defaults_from_file()
             
         for key, content in cls._file_cache.items():
-            existing = db.query(models.PromptTemplate).filter(models.PromptTemplate.key == key).first()
+            # Check specifically for zh-TW version
+            existing = db.query(models.PromptTemplate).filter(
+                models.PromptTemplate.key == key,
+                models.PromptTemplate.language == "zh-TW"
+            ).first()
+            
             if not existing:
-                print(f"Initializing prompt: {key}")
+                print(f"Initializing prompt: {key} (zh-TW)")
                 new_prompt = models.PromptTemplate(
                     key=key,
                     language="zh-TW", # Default language
@@ -48,6 +53,12 @@ class PromptService:
                     version=1
                 )
                 db.add(new_prompt)
+            else:
+                # Update existing prompt if content changed (Force sync from file)
+                if existing.content != content:
+                    print(f"Updating prompt content: {key}")
+                    existing.content = content
+                    # existing.version += 1 # Optional: increment version
         try:
             db.commit()
         except Exception as e:

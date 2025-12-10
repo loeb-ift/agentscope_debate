@@ -30,7 +30,8 @@ class SearXNGAdapter(ToolAdapter):
         return {
             "type": "object",
             "properties": {
-                "q": {"type": "string", "description": "搜尋關鍵字"},
+                "q": {"type": "string", "description": "搜尋關鍵字 (Required)"},
+                "query": {"type": "string", "description": "Alias for q"},
                 "category": {
                     "type": "string",
                     "enum": ["general", "news", "science"],
@@ -49,7 +50,7 @@ class SearXNGAdapter(ToolAdapter):
                     "description": "指定搜尋引擎 (例如: 'google cse', 'brave api', 'bing api')，留空則使用預設聚合"
                 }
             },
-            "required": ["q"]
+            "required": [] # Handled in invoke
         }
 
     def describe(self) -> Dict[str, Any]:
@@ -63,7 +64,11 @@ class SearXNGAdapter(ToolAdapter):
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
         searxng_host = os.getenv("SEARXNG_HOST", "http://searxng:8080")
         base_url = f"{searxng_host}/search"
-        q = kwargs.get("q")
+        q = kwargs.get("q") or kwargs.get("query")
+        
+        if not q:
+            return {"error": "Missing required parameter: q (or query)"}
+
         category = kwargs.get("category", "general")
         limit = kwargs.get("limit", 10)
         engines = kwargs.get("engines")

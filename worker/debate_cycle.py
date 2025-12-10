@@ -366,7 +366,7 @@ class DebateCycle:
                 )
 
                 # Call LLM for judgement
-                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。", context_tag=self.debate_id)
+                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。", context_tag=f"{self.debate_id}:{agent.name}:Verification")
                 
                 # Parse JSON
                 try:
@@ -410,7 +410,7 @@ class DebateCycle:
             verification_report=verification_report
         )
         
-        response = await call_llm_async(final_prompt, system_prompt=f"你是 {agent.name}，公正的第三方。", context_tag=self.debate_id)
+        response = await call_llm_async(final_prompt, system_prompt=f"你是 {agent.name}，公正的第三方。", context_tag=f"{self.debate_id}:{agent.name}:Speech")
         return response
 
     def _run_round(self, round_num: int) -> Dict[str, Any]:
@@ -562,7 +562,7 @@ class DebateCycle:
         finally:
             db.close()
             
-        return await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+        return await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:TeamSummary:{team_name}")
 
     def _agent_select_tools(self, agent: AgentBase, side: str):
          """Sync wrapper for backward compatibility"""
@@ -610,7 +610,7 @@ class DebateCycle:
 
         try:
             # Async LLM Call
-            response = await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+            response = await call_llm_async(user_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}:ToolSelection")
             
             # 嘗試解析 JSON (支援 List 或 Dict 格式)
             selected_tools = []
@@ -642,9 +642,13 @@ class DebateCycle:
                 tools_display = "\n".join([f"  • {tool}" for tool in selected_tools])
                 self._publish_log(f"{agent.name} (Setup)", f"✅ 已選擇 {len(selected_tools)} 個工具：\n{tools_display}")
             else:
-                print(f"Agent {agent.name} failed to select tools (no JSON), using defaults.")
-                self.agent_tools_map[agent.name] = []
-                self._publish_log(f"{agent.name} (Setup)", "⚠️ 工具選擇失敗，將使用默認配置")
+                # Fallback: Auto-equip all available tools if selection fails
+                all_available = [t['name'] for t in available_tools_list]
+                self.agent_tools_map[agent.name] = all_available
+                print(f"Agent {agent.name} failed to select tools. Auto-equipping all: {all_available}")
+                
+                tools_display = "\n".join([f"  • {tool}" for tool in all_available])
+                self._publish_log(f"{agent.name} (Setup)", f"⚠️ 工具選擇失敗，已自動裝備所有可用工具 ({len(all_available)}個)：\n{tools_display}")
         except Exception as e:
             print(f"Error in tool selection for {agent.name}: {e}")
             self.agent_tools_map[agent.name] = []
@@ -842,14 +846,14 @@ class DebateCycle:
                 current_step += 1
                 
                 # Async LLM Call
-                response = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+                response = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
                 print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
                 # Retry 機制 (Only for empty response on first step)
                 if not response and current_step == 1:
                     print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
                     retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
-                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
                 
                 # Check for tool call
                 try:
@@ -932,6 +936,15 @@ class DebateCycle:
                             
                             self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
                             
+                            # Publish Tool Result Preview to Log Stream
+                            result_preview_log = str(tool_result)
+                            if len(result_preview_log) > 500:
+                                result_preview_log = result_preview_log[:500] + "... (點擊查看完整數據)"
+                            self._publish_log(f"{agent.name} (Tool Result)", f"📊 工具執行結果摘要：\n{result_preview_log}")
+                            
+                            # Print full result to backend console for debugging (as requested)
+                            print(f"DEBUG: Full tool result for {tool_name}:\n{json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)}")
+
                             # Record successful tool usage to Tool LTM
                             try:
                                 tool_mem = ReMeToolLongTermMemory()
@@ -1058,7 +1071,7 @@ class DebateCycle:
                     db.close()
 
                 # Ask Agent
-                decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+                decision_response = await call_llm_async(extension_option_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
                 
                 # Check for extension request
                 json_match = re.search(r'\{.*\}', decision_response, re.DOTALL)
@@ -1091,7 +1104,7 @@ class DebateCycle:
                             finally:
                                 db.close()
                                 
-                            chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys, context_tag=self.debate_id)
+                            chairman_res = await call_llm_async("請進行審核。", system_prompt=chairman_sys, context_tag=f"{self.debate_id}:Chairman")
                             
                             # Parse Chairman Decision
                             try:
@@ -1110,7 +1123,7 @@ class DebateCycle:
                                     # Fall through to forced summary (or return text if agent replies text next time)
                                     # Actually, we should force summary NOW or give one last chance?
                                     # Let's give one last chance with text-only constraint.
-                                    final_res = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=self.debate_id)
+                                    final_res = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
                                     return final_res
                                     
                             except Exception as e:
@@ -1127,17 +1140,29 @@ class DebateCycle:
             # If reached here, it means extension denied or invalid request, break outer loop to fallback
             break
         
-        # Loop ended (either max steps reached again, or denied extension) -> Return Collected Evidence Report
-        print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Returning evidence report.")
+        # Loop ended (either max steps reached again, or denied extension)
+        # FORCE A CONCLUSION: Instead of returning a system report, force the LLM to speak based on whatever it has.
+        print(f"WARNING: Agent {agent.name} reached max steps ({max_steps}). Forcing conclusion.")
         
         evidence_text = "\n\n".join(collected_evidence)
-        self._publish_log(f"{agent.name} (Report)", f"⚠️ 調用次數耗盡，回傳證據摘要：\n\n{evidence_text}")
-        fallback_report = f"""(系統自動生成報告)
-Agent {agent.name} 已達到工具調用上限，未能發表最終觀點。
-以下是該 Agent 在思考過程中收集到的證據摘要：
+        self._publish_log(f"{agent.name} (System)", f"⚠️ 調用次數耗盡，正在強制生成總結發言...")
+        
+        force_conclusion_prompt = f"""
+【系統強制指令】
+你已經達到工具調用次數上限，不能再使用工具了。
+請根據你目前已蒐集到的證據（或若無證據，則根據你的專業知識與邏輯推演），立即發表你的本輪論點。
 
+**已蒐集的證據摘要**：
 {evidence_text}
 
-(請接續討論或由主席判斷是否需要補充)"""
-        
-        return fallback_report
+請直接輸出你的辯論發言（純文字）：
+"""
+        try:
+            # Force call without tool capability (modify system prompt? No, just strong instruction)
+            # We use the same system prompt but a very strong user instruction.
+            final_speech = await call_llm_async(force_conclusion_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
+            return final_speech
+        except Exception as e:
+             # If even this fails, then fallback to report
+             print(f"Error in forced conclusion: {e}")
+             return f"(系統報告：Agent 在強制總結時發生錯誤，證據如下)\n{evidence_text}"

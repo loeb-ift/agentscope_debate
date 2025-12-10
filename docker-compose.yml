@@ -26,6 +26,7 @@ services:
       - DATABASE_URL=sqlite:///data/debate.db
       - OLLAMA_HOST=${OLLAMA_HOST}
       - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - TEJ_API_KEY=${TEJ_API_KEY}
       - PYTHONPATH=/app
     depends_on:
       - redis
@@ -44,6 +45,7 @@ services:
       - DATABASE_URL=sqlite:///data/debate.db
       - OLLAMA_HOST=${OLLAMA_HOST}
       - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - TEJ_API_KEY=${TEJ_API_KEY}
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_HOST=http://searxng:8080
       - PYTHONPATH=/app
