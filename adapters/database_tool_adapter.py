@@ -19,9 +19,11 @@ class SearchCompany(DatabaseToolBase):
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "搜尋關鍵字 (名稱、代碼)"},
+                "q": {"type": "string", "description": "Alias for query"},
+                "keyword": {"type": "string", "description": "Alias for query"},
                 "limit": {"type": "integer", "default": 5}
             },
-            "required": ["query"]
+            "required": []
         }
 
     def describe(self) -> Dict[str, Any]:
@@ -33,8 +35,13 @@ class SearchCompany(DatabaseToolBase):
         }
 
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
-        query = kwargs.get("query")
+        # Support aliases
+        query = kwargs.get("query") or kwargs.get("q") or kwargs.get("keyword") or kwargs.get("name") or kwargs.get("code")
         limit = kwargs.get("limit", 5)
+        
+        if not query:
+            return {"error": "Missing required parameter: query (or q/keyword/name)"}
+
         db = self.get_db()
         try:
             results = db.query(financial_models.Company).filter(
@@ -54,7 +61,10 @@ class SearchCompany(DatabaseToolBase):
                     "sector": r.industry_sector,
                     "market_cap": float(r.market_cap) if r.market_cap else None
                 })
-            return {"results": data}
+            
+            # Add guidance for agents to encourage using available data tools
+            hint = "💡 搜尋完成。請使用上方結果中的 'id' (或 'ticker') 作為參數，配合您已裝備的財務或股價查詢工具 (如 tej.* 或 yfinance.* 等) 獲取進一步數據。若您當前未裝備這些工具，請使用 `reset_equipped_tools(group='financial_data')` 切換工具組。"
+            return {"results": data, "system_hint": hint}
         finally:
             db.close()
 

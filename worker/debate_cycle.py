@@ -14,7 +14,7 @@ from worker.llm_utils import call_llm, call_llm_async
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
 from api.database import SessionLocal
-from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory, ReMeHistoryMemory
+from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory, ReMeHistoryMemory, HippocampalMemory
 from api.tool_registry import tool_registry
 from api.toolset_service import ToolSetService
 from api.redis_client import get_redis_client
@@ -40,6 +40,7 @@ class DebateCycle:
         self.compressed_history = "無"  # 存儲 LLM 壓縮後的歷史摘要 (Legacy)
         self.archived_summaries = [] # List of structured summaries
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
+        self.hippocampus = HippocampalMemory(debate_id) # Init Hippocampal Memory
 
     def _get_memory_usage(self) -> str:
         """獲取當前記憶體使用量 (MB)"""
@@ -343,10 +344,10 @@ class DebateCycle:
             
             try:
                 # Re-execute tool
-                from worker import tasks
+                from worker.tool_invoker import call_tool
                 # Execute sync tool in thread pool
                 loop = asyncio.get_running_loop()
-                verify_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
+                verify_result = await loop.run_in_executor(None, call_tool, tool_name, params)
                 
                 # Construct verification prompt via PromptService
                 db = SessionLocal()
@@ -466,6 +467,14 @@ class DebateCycle:
             rag = ReMeHistoryMemory(self.debate_id)
             await rag.add_turn_async(f"{team_name} Summary", team_summary, round_num)
             
+        # [Hippocampus] Trigger Memory Consolidation
+        self._publish_log("System", "🧠 正在進行海馬體記憶鞏固 (Consolidating Working Memory)...")
+        await self.hippocampus.consolidate()
+
+        # [Hippocampus] Trigger Memory Consolidation
+        self._publish_log("System", "🧠 正在進行海馬體記憶鞏固 (Consolidating Working Memory)...")
+        await self.hippocampus.consolidate()
+
         # 3. 主席彙整與下一輪方向
         handcard = self.analysis_result.get('step6_handcard') or self.analysis_result.get('step5_summary', '無手卡')
         
@@ -756,7 +765,13 @@ class DebateCycle:
             tools_desc = get_tools_description()
             
         # Append Meta-Tool Description
-        tools_desc += "\n\n### reset_equipped_tools\nDescription: 動態切換工具組 (active tool group)。\nParameters: {'group': 'browser_use' | 'financial_data' | 'basic'}"
+        # Dynamically fetch available groups from registry for the hint
+        available_groups = set()
+        for _, t_data in tool_registry.list().items():
+             available_groups.add(t_data.get('group', 'basic'))
+        groups_str = " | ".join([f"'{g}'" for g in sorted(available_groups)])
+        
+        tools_desc += f"\n\n### reset_equipped_tools\nDescription: 動態切換工具組 (active tool group)。若你找不到需要的工具，請嘗試切換。\nParameters: {{'group': {groups_str}}}"
         
         # Append Chairman Intervention Tool (Virtual)
         tools_desc += "\n\n### call_chairman\nDescription: 當你發現辯題資訊嚴重不足（如缺乏背景、定義不清），無法進行有效分析時，請使用此工具通知主席介入處理。\nParameters: {'reason': '說明具體缺少什麼資訊或背景'}"
@@ -872,7 +887,7 @@ class DebateCycle:
 
                     # Check if valid tool call
                     if isinstance(tool_call, dict) and "tool" in tool_call and "params" in tool_call:
-                        tool_name = tool_call["tool"]
+                        tool_name = str(tool_call["tool"]).strip()
                         params = tool_call["params"]
                         
                         # --- Meta-Tool: reset_equipped_tools ---
@@ -903,7 +918,18 @@ class DebateCycle:
                             
                             # Recursive retry (Reset steps)
                             return await self._agent_turn_async(agent, side, round_num)
+
+                        # --- Meta-Tool: request_extension (Early access check) ---
+                        if tool_name == "request_extension":
+                             print(f"Agent {agent.name} requested extension prematurely.")
+                             self._publish_log(f"{agent.name} (System)", "⚠️ 你還有剩餘的調查次數，請優先使用工具進行調查。")
+                             current_prompt = "系統提示：你還有剩餘的調查次數，無需申請延長。請繼續使用工具搜尋數據。"
+                             continue
                         
+                        # --- Memory Tool Context Injection ---
+                        if tool_name == "search_shared_memory":
+                            params["debate_id"] = self.debate_id
+
                         # --- Regular Tool Execution ---
                         
                         # [STRICT TOOL VALIDATION]
@@ -930,11 +956,21 @@ class DebateCycle:
                         self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
                         
                         try:
-                            from worker import tasks
-                            loop = asyncio.get_running_loop()
-                            tool_result = await loop.run_in_executor(None, tasks.execute_tool, tool_name, params)
+                            # 1. Check Working Memory (Sensory Gating)
+                            cached_result = await self.hippocampus.retrieve_working_memory(tool_name, params)
                             
-                            self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功。")
+                            if cached_result:
+                                tool_result = cached_result['result']
+                                self._publish_log(f"{agent.name} (Memory)", f"🧠 從海馬體短期記憶中獲取了結果 (Access: {cached_result['access_count']})")
+                            else:
+                                # 2. Execute Tool (Sensory Input)
+                                from worker.tool_invoker import call_tool
+                                loop = asyncio.get_running_loop()
+                                tool_result = await loop.run_in_executor(None, call_tool, tool_name, params)
+                                
+                                # 3. Store in Working Memory
+                                await self.hippocampus.store(agent.name, tool_name, params, tool_result)
+                                self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬體。")
                             
                             # Publish Tool Result Preview to Log Stream
                             result_preview_log = str(tool_result)
@@ -1081,6 +1117,19 @@ class DebateCycle:
                         if req.get("tool") == "request_extension":
                             reason = req.get("params", {}).get("reason", "無理由")
                             self._publish_log(f"{agent.name} (Request)", f"申請延長調查：{reason}")
+                            
+                            # [Hippocampus] Check Shared Memory before bothering Chairman
+                            self._publish_log("System", f"🧠 正在查詢海馬體記憶以驗證延長需求...")
+                            mem_results = await self.hippocampus.search_shared_memory(query=reason, limit=3)
+                            
+                            # Heuristic: If "No relevant memories" is NOT in the result, it means we found something.
+                            # Ideally search_shared_memory should return a list or structured object, but it returns a string currently.
+                            # We can check if the result string length implies found content.
+                            
+                            if "No relevant memories" not in mem_results and len(mem_results) > 50:
+                                self._publish_log("System", f"✅ 海馬體中發現相關資訊，延長申請自動駁回並提供資訊。")
+                                current_prompt = f"【系統提示】延長申請已自動駁回，因為在共享記憶中發現了相關資訊：\n\n{mem_results}\n\n請利用這些資訊繼續你的論述或總結。"
+                                continue # Back to agent loop
                             
                             # Call Chairman for Review
                             db = SessionLocal()

@@ -59,42 +59,32 @@ async def main():
         {
             "tool": "internal.search_company",
             "params": {"query": TEST_COID},
-            "desc": "內部資料庫搜尋"
+            "desc": "內部資料庫搜尋 (Standard)"
+        },
+        {
+            "tool": "internal.search_company",
+            "params": {"keyword": TEST_NAME},
+            "desc": "內部資料庫搜尋 (Alias 'keyword')"
         },
         {
             "tool": "internal.get_company_details",
-            "params": {"company_id": TEST_COID}, # Should work with alias 'coid' too if logic correct
-            "desc": "內部資料庫詳情 (Standard Param)"
-        },
-        {
-            "tool": "internal.get_company_details",
-            "params": {"coid": TEST_COID}, # Testing Alias support
-            "desc": "內部資料庫詳情 (Alias Testing)"
+            "params": {"id": TEST_COID}, 
+            "desc": "內部資料庫詳情 (Alias 'id')"
         },
         {
             "tool": "tej.company_info",
-            "params": {"coid": TEST_COID},
-            "desc": "TEJ 基本資料"
+            "params": {"company_id": TEST_COID},
+            "desc": "TEJ 基本資料 (Alias 'company_id')"
         },
         {
             "tool": "tej.stock_price",
-            "params": {"coid": TEST_COID, "opts.limit": 5},
-            "desc": "TEJ 股價 (Limit 5)"
-        },
-        {
-            "tool": "tej.monthly_revenue",
-            "params": {"coid": TEST_COID, "opts.limit": 3},
-            "desc": "TEJ 月營收"
+            "params": {"ticker": TEST_COID, "opts.limit": 20}, # Limit 20 to test truncation (10 max)
+            "desc": "TEJ 股價 (Alias 'ticker' + Truncation Test)"
         },
         {
             "tool": "searxng.search",
             "params": {"query": f"{TEST_NAME} 2025年營收"},
-            "desc": "SearXNG 網路搜尋"
-        },
-        {
-            "tool": "yfinance.stock_info",
-            "params": {"symbol": f"{TEST_COID}.TW"},
-            "desc": "Yahoo Finance (TW Suffix)"
+            "desc": "SearXNG (Alias 'query')"
         }
     ]
 
@@ -130,10 +120,14 @@ async def main():
             elif isinstance(result, dict) and ("data" in result or "results" in result or "info" in result):
                 # Check for empty data
                 data = result.get("data") or result.get("results")
-                if data:
+                if data is not None: # Empty list is valid result
                     status = "✅ 成功"
                 else:
-                    status = "⚠️ 空數據"
+                    status = "⚠️ 空響應"
+                    
+                # Check warnings for truncation
+                if result.get("warnings"):
+                    details += f" [Warnings: {result['warnings']}]"
             else:
                  # Some tools return direct dicts without 'data' wrapper
                  if result:
@@ -150,9 +144,6 @@ async def main():
                 "details": details
             })
             
-            # Simulate "Record" (Writing to log/Redis would happen here)
-            # print(f"   (模擬存入 Redis Evidence Key...)")
-
         except Exception as e:
             print(f"   🔥 異常: {e}")
             results_summary.append({"tool": tool_name, "status": "🔥 崩潰", "details": str(e)})

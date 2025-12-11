@@ -75,6 +75,9 @@ tool_registry.register_lazy("internal.get_security_details", lazy_import_factory
 tool_registry.register_lazy("internal.term_lookup", lazy_import_factory("adapters.internal_terms_adapter", "InternalTermLookup"), group="internal_data", description="Internal Term Lookup")
 tool_registry.register_lazy("internal.term_explain", lazy_import_factory("adapters.internal_terms_adapter", "InternalTermExplain"), group="internal_data", description="Internal Term Explain")
 
+# Memory Tools
+tool_registry.register_lazy("search_shared_memory", lazy_import_factory("adapters.memory_adapter", "SearchSharedMemory"), group="basic", description="Search Shared Memory")
+
 # 在 worker 啟動時初始化資料庫與數據
 # init_db()
 #

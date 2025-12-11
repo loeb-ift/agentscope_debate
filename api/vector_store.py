@@ -99,13 +99,19 @@ class VectorStore:
         if filter_conditions:
             should_clauses = []
             must_clauses = []
+            
             for key, value in filter_conditions.items():
-                if isinstance(value, list):
-                    # Match any (Should)
+                # Range Filter (e.g. timestamp)
+                if isinstance(value, dict) and any(k in value for k in ['gt', 'gte', 'lt', 'lte']):
+                    must_clauses.append(qmodels.FieldCondition(key=key, range=qmodels.Range(**value)))
+                
+                # List Match (Match Any)
+                elif isinstance(value, list):
                     for v in value:
                         should_clauses.append(qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=v)))
+                
+                # Exact Match
                 else:
-                    # Match exact (Must)
                     must_clauses.append(qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value)))
             
             if should_clauses or must_clauses:

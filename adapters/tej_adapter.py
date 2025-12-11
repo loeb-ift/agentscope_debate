@@ -59,14 +59,23 @@ class TEJBaseAdapter(ToolAdapter):
              print(f"DEBUG: Auto-correcting nested params for {table}: {params['params']}")
              params.update(params["params"])
 
+        # Auto-correct aliases for 'coid'
+        if "coid" not in params:
+            for alias in ["company_id", "id", "symbol", "ticker"]:
+                if alias in params:
+                    params["coid"] = params[alias]
+                    if filters and "coid" in filters and filters["coid"] is None:
+                        filters["coid"] = params[alias] # Update filter if it was passed as None key
+                    break
+
         url = self._build_url(db, table)
         query: Dict[str, Any] = {}
         
         # TEJ API uses opts.limit and opts.offset for pagination to avoid conflict with column names
         if "limit" in params:
             query["opts.limit"] = params["limit"]
-        else:
-            query["opts.limit"] = 50 # Default limit
+        # else:
+        #     query["opts.limit"] = 50 # Default limit (Disabled to avoid 400 errors on some tables)
             
         if "offset" in params:
             query["opts.offset"] = params["offset"]
@@ -151,6 +160,47 @@ class TEJBaseAdapter(ToolAdapter):
              
         return UpstreamError(code=code, http_status=http_status, message=message)
 
+    def _normalize_tej_result(self, tool_data: Dict[str, Any], result: Dict[str, Any], warnings: list) -> Dict[str, Any]:
+        """將 TEJ 結果標準化為 { data: [...] }，並附加 warnings。"""
+        group = tool_data.get("group") or ""
+        provider = getattr(tool_data.get("instance"), "provider", "")
+        is_tej = (group == "tej") or (str(provider).lower() == "tej")
+        if not is_tej or not isinstance(result, dict):
+            # 非 TEJ 或非 dict，直接返回
+            if warnings:
+                if isinstance(result, dict):
+                    result["warnings"] = warnings
+            return result
+        # 嘗試抽取資料陣列
+        data = None
+        if isinstance(result.get("data"), list):
+            data = result.get("data")
+            meta = result.get("meta")
+        else:
+            dt = result.get("datatable") if isinstance(result.get("datatable"), dict) else None
+            data = dt.get("data") if isinstance(dt and dt.get("data"), list) else None
+            meta = (dt.get("meta") if isinstance(dt, dict) else None)
+        
+        if isinstance(data, list):
+            # [Smart Truncation]
+            MAX_ROWS_TO_RETURN = 10
+            if len(data) > MAX_ROWS_TO_RETURN:
+                original_count = len(data)
+                # Take last 10 (assuming ascending order which is typical for time series)
+                data = data[-MAX_ROWS_TO_RETURN:] 
+                warnings.append(f"truncated: showing last {MAX_ROWS_TO_RETURN} of {original_count} rows. Use date filter to narrow down.")
+            
+            out = {"data": data}
+            if meta is not None:
+                out["meta"] = meta
+            if warnings:
+                out["warnings"] = warnings
+            return out
+        # 無法標準化，回傳原始並帶警示
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
 class TEJCompanyInfo(TEJBaseAdapter):
     name = "tej.company_info"
     version = "v1"
@@ -164,17 +214,18 @@ class TEJCompanyInfo(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
 
         coid = kwargs.get("coid")
-        if not coid:
-            raise ValueError("coid is required")
+        # Validation removed here, handled by _execute_query alias logic or TEJ API error
+        # if not coid:
+        #     raise ValueError("coid is required")
         return self._execute_query("TRAIL", "AIND", params=kwargs, filters={"coid": coid})
 
 class TEJStockPrice(TEJBaseAdapter):
@@ -190,11 +241,11 @@ class TEJStockPrice(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -213,11 +264,11 @@ class TEJMonthlyRevenue(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -238,11 +289,11 @@ class TEJInstitutionalHoldings(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -262,11 +313,11 @@ class TEJMarginTrading(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -285,11 +336,11 @@ class TEJForeignHoldings(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -310,11 +361,11 @@ class TEJFinancialSummary(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330'). Aliases: company_id, id, ticker"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": [] # Handled dynamically
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -333,11 +384,11 @@ class TEJFundNAV(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金統編/代碼"},
+                "coid": {"type": "string", "description": "基金統編/代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -357,11 +408,11 @@ class TEJShareholderMeeting(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼"},
+                "coid": {"type": "string", "description": "公司代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
                 "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -380,9 +431,9 @@ class TEJFundBasicInfo(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金統編/代碼"},
+                "coid": {"type": "string", "description": "基金統編/代碼. Aliases: company_id, id"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -399,9 +450,9 @@ class TEJOffshoreFundInfo(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -418,11 +469,11 @@ class TEJOffshoreFundDividend(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -439,11 +490,11 @@ class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -460,11 +511,11 @@ class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -481,11 +532,11 @@ class TEJOffshoreFundNAVRank(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -502,11 +553,11 @@ class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -523,11 +574,11 @@ class TEJOffshoreFundSuspension(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -544,11 +595,11 @@ class TEJOffshoreFundPerformance(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "基金代碼"},
+                "coid": {"type": "string", "description": "基金代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -587,11 +638,11 @@ class TEJFinancialCoverCumulative(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼"},
+                "coid": {"type": "string", "description": "公司代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -611,11 +662,11 @@ class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼"},
+                "coid": {"type": "string", "description": "公司代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -632,11 +683,11 @@ class TEJFinancialCoverQuarterly(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "公司代碼"},
+                "coid": {"type": "string", "description": "公司代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -656,11 +707,11 @@ class TEJFuturesData(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "期貨代碼"},
+                "coid": {"type": "string", "description": "期貨代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -677,9 +728,9 @@ class TEJOptionsBasicInfo(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "選擇權代碼"},
+                "coid": {"type": "string", "description": "選擇權代碼. Aliases: company_id, id"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
@@ -696,14 +747,13 @@ class TEJOptionsDailyTrading(TEJBaseAdapter):
         return {
             "type": "object",
             "properties": {
-                "coid": {"type": "string", "description": "選擇權代碼"},
+                "coid": {"type": "string", "description": "選擇權代碼. Aliases: company_id, id"},
                 "start_date": {"type": "string", "description": "開始日期"},
                 "end_date": {"type": "string", "description": "結束日期"},
             },
-            "required": ["coid"]
+            "required": []
         }
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
         return self._execute_query("TRAIL", "TAOPTION", params=kwargs, filters={"coid": kwargs.get("coid")})
-

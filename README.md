@@ -101,6 +101,11 @@ agentscope_debate/
 └── openapi.json         # OpenAPI 規範文件
 ```
 
+## 記憶與快取機制
+
+- 詳見 docs/MEMORY_AND_CACHE_DESIGN.md（繁體中文：短期/長期記憶、語意快取、Qdrant、Ollama 嵌入設定、辯論流程時序圖）。
+- 提醒：向量化與歷史 RAG 記憶類別的同步方法（record / retrieve 等）已改為直接拋出 NotImplementedError，請全面改用對應的 async 版本（record_async / retrieve_async / add_turn_async 等）。
+
 ## 維護
 
 - 交付企劃與維護指南：請參考 PROJECT_DELIVERY_PLAN_zh-TW.md（包含架構、部署、資料庫、API、工具集、Worker 流程、測試、安全與路線圖）。

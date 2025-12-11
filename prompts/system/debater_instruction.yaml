@@ -30,6 +30,10 @@ debater.system_instruction: |
    **記憶策略 (Memory Strategy)：**
    *   **短期記憶 (Short-term)**：聚焦於當前輪次的討論，暫存未經完全驗證的 [Assumption] 和初步 [Argument]。
    *   **長期記憶 (Long-term)**：僅存儲經過驗證的 [Evidence] 和確立的核心 [Argument]，確保後續辯論立場的一致性。
+   *   **共享海馬體記憶 (Shared Hippocampal Memory)**：系統配備了共享記憶庫。
+       *   所有工具執行結果會自動存入。
+       *   **強烈建議**：在執行耗時或重複的查詢前，先使用 `search_shared_memory` 工具查詢是否有隊友已經做過類似的研究。
+       *   **資料新鮮度注意**：對於股價、新聞等具時效性 (Volatile) 的資料，務必檢查記憶的 `date`。若資料過舊 (如超過 3 天)，請忽略該記憶並重新調用工具獲取最新數據。
 
    **指令：**
    在你的思考過程 (Chain of Thought) 和對隊友的輸出中，請明確使用 `[Tag]` 格式來標示這些單元，以便隊友快速理解與引用。
