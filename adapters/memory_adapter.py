@@ -5,7 +5,7 @@ from worker.memory import HippocampalMemory
 class SearchSharedMemory(ToolAdapter):
     name = "search_shared_memory"
     version = "v1"
-    description = "從共享海馬體記憶中檢索過往的工具調用結果與知識。支援語義搜尋與來源過濾。"
+    description = "從共享海馬迴記憶中檢索過往的工具調用結果與知識。支援語義搜尋與來源過濾。"
 
     @property
     def schema(self) -> Dict[str, Any]:

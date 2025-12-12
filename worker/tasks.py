@@ -17,6 +17,17 @@ def execute_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 from api.database import SessionLocal
 from api import models
+import requests
+from api.config import Config
+
+def check_services():
+    """Check connectivity to dependent services."""
+    # 1. Ollama
+    try:
+        requests.get(f"{Config.OLLAMA_HOST}", timeout=2)
+    except Exception as e:
+        print(f"⚠️ Warning: Ollama connection failed ({Config.OLLAMA_HOST}): {e}")
+        # We don't block here because maybe it's just root path 404, but at least we log it.
 
 @app.task(bind=True)
 def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
@@ -24,6 +35,9 @@ def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
     執行辯論循環並將結果存檔。
     teams_config format: [{"name": "Team A", "side": "pro", "agents": [...]}, ...]
     """
+    print("🚀 Worker received task: run_debate_cycle")
+    check_services()
+    
     debate_id = self.request.id
     chairman = Chairman(name="主席")
     

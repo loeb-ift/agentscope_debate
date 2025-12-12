@@ -46,6 +46,13 @@ class Config:
     }
 
     @classmethod
+    def get(cls, key, default=None):
+        """Get config value from memory or env"""
+        if hasattr(cls, key):
+            return getattr(cls, key)
+        return os.getenv(key, default)
+
+    @classmethod
     def update(cls, key, value):
         """Update config in memory and save to .env"""
         # 1. Update Memory

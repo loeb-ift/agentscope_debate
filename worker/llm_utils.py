@@ -5,12 +5,20 @@ import asyncio
 import httpx
 import time
 from typing import List, Dict, Any, Optional
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 from api.vector_store import VectorStore
 from api.config import Config
 
 # Configuration
 OLLAMA_HOST = Config.OLLAMA_HOST
+if OLLAMA_HOST:
+    if not OLLAMA_HOST.startswith(("http://", "https://")):
+        OLLAMA_HOST = f"http://{OLLAMA_HOST}"
+    
+    # Warning for 0.0.0.0/localhost in Docker environment
+    if "0.0.0.0" in OLLAMA_HOST or "localhost" in OLLAMA_HOST or "127.0.0.1" in OLLAMA_HOST:
+        print(f"⚠️ WARNING: OLLAMA_HOST is set to '{OLLAMA_HOST}'. Inside a Docker container, this refers to the container itself, not the host machine. If Ollama is running on the host, please use the host's LAN IP or 'host.docker.internal' (if supported).")
+
 OLLAMA_MODEL = Config.OLLAMA_MODEL
 MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENCY", "5")) # Keep env for concurrency for now
 REQUEST_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
@@ -85,8 +93,12 @@ def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
     }
 
     try:
+        start_time = time.time()
+        print(f"DEBUG: Calling LLM (Sync) model={model}...")
         response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
+        elapsed = time.time() - start_time
+        print(f"DEBUG: LLM (Sync) finished in {elapsed:.2f}s")
         result = response.json()
         message = result.get("message", {})
         content = message.get("content", "")
@@ -114,13 +126,73 @@ def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError))
 )
+async def _update_semantic_cache(cache_query: str, content: str, model: str, context_tag: Optional[str]):
+    """Background task to update semantic cache."""
+    try:
+        metadata = {
+            "response": content,
+            "model": model,
+            "timestamp": time.time()
+        }
+        if context_tag:
+            metadata["context"] = context_tag
+            
+        await VectorStore.add_texts(
+            collection_name="llm_semantic_cache",
+            texts=[cache_query],
+            metadatas=[metadata]
+        )
+        # print(f"DEBUG: Cache updated in background.")
+    except Exception as e:
+        print(f"Failed to update cache (background): {e}")
+
+async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: str = None) -> str:
+    """Internal implementation with retry logic."""
+    url = f"{OLLAMA_HOST}/api/chat"
+    
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False
+    }
+
+    async with _semaphore:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            try:
+                start_time = time.time()
+                print(f"DEBUG: Calling LLM (Async) model={model}...")
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                elapsed = time.time() - start_time
+                print(f"DEBUG: LLM (Async) finished in {elapsed:.2f}s")
+                
+                result = response.json()
+                message = result.get("message", {})
+                content = message.get("content", "")
+                
+                # Handle tool_calls if present (Ollama standard format)
+                if "tool_calls" in message and message["tool_calls"]:
+                    tool_result = _process_tool_calls(message["tool_calls"])
+                    if tool_result:
+                        return tool_result
+
+                if not content:
+                     print(f"WARNING: LLM returned empty content. Full result: {result}")
+                
+                return content
+            except Exception as e:
+                print(f"Error calling LLM (Async): {e}")
+                raise e # Let tenacity handle retry
+
 async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None, context_tag: str = None) -> str:
     """
-    Async Call the LLM (Ollama) with throttling and retries.
-    Includes Semantic Caching via Qdrant.
-    
-    Args:
-        context_tag: Optional tag (e.g. debate_id) to scope the semantic cache.
+    Async Call the LLM (Ollama) with throttling, retries, and semantic caching.
+    Wrapper to handle RetryError gracefully.
     """
     if not model:
         model = OLLAMA_MODEL
@@ -160,66 +232,33 @@ async def call_llm_async(prompt: str, system_prompt: str = None, model: str = No
              if is_valid:
                  cached_resp = entry.get('response')
                  if cached_resp:
-                     print("DEBUG: Semantic Cache Hit")
-                     return cached_resp
+                     # CRITICAL FIX: Prevent infinite loops with Meta-Tools
+                     # If the cached response is a tool call to 'reset_equipped_tools',
+                     # we should avoid using the cache because this action is state-dependent
+                     # and using a stale cache can cause an infinite loop (reset -> reset -> reset).
+                     if '"tool": "reset_equipped_tools"' in cached_resp or "'tool': 'reset_equipped_tools'" in cached_resp:
+                         print("DEBUG: Semantic Cache Hit but SKIPPED (Dangerous Meta-Tool detected)")
+                     else:
+                         print("DEBUG: Semantic Cache Hit")
+                         return cached_resp
                      
     except Exception as e:
         print(f"Cache lookup failed: {e}")
     # -----------------------------
 
-    url = f"{OLLAMA_HOST}/api/chat"
-    
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    try:
+        content = await _call_llm_async_impl(prompt, system_prompt, model)
+        
+        # --- Store in Semantic Cache (Fire-and-Forget) ---
+        if content:
+            asyncio.create_task(_update_semantic_cache(cache_query, content, model, context_tag))
+        # ---------------------------------------
+        return content
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
-
-    async with _semaphore:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            try:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                result = response.json()
-                message = result.get("message", {})
-                content = message.get("content", "")
-                
-                # Handle tool_calls if present (Ollama standard format)
-                if "tool_calls" in message and message["tool_calls"]:
-                    tool_result = _process_tool_calls(message["tool_calls"])
-                    if tool_result:
-                        return tool_result
-
-                if not content:
-                     print(f"WARNING: LLM returned empty content. Full result: {result}")
-                
-                # --- Store in Semantic Cache (Async) ---
-                if content:
-                    try:
-                        # Store prompt as text, response as metadata
-                        metadata = {
-                            "response": content, 
-                            "model": model,
-                            "timestamp": time.time()
-                        }
-                        if context_tag:
-                            metadata["context"] = context_tag
-                            
-                        await VectorStore.add_texts(
-                            collection_name="llm_semantic_cache",
-                            texts=[cache_query],
-                            metadatas=[metadata]
-                        )
-                    except Exception as e:
-                        print(f"Failed to update cache: {e}")
-                # ---------------------------------------
-
-                return content
-            except Exception as e:
-                print(f"Error calling LLM (Async): {e}")
-                raise e # Let tenacity handle retry
+    except RetryError:
+        error_msg = f"LLM Generation Failed: Timeout after multiple retries ({REQUEST_TIMEOUT}s each). Please check your Ollama service performance."
+        print(f"CRITICAL ERROR: {error_msg}")
+        return f"Error: {error_msg}"
+    except Exception as e:
+        print(f"Unexpected error in call_llm_async: {e}")
+        return f"Error: {e}"

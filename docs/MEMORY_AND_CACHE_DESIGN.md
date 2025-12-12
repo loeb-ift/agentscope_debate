@@ -1,10 +1,10 @@
-# 本專案的記憶與快取機制設計 (v3.0 - 海馬體架構版)
+# 本專案的記憶與快取機制設計 (v3.0 - 海馬迴架構版)
 
-本文件說明本專案升級後的「海馬體記憶架構 (Hippocampal Memory Architecture)」，該架構整合了短期感知、長期知識庫與自動鞏固機制，旨在為多智能體（Multi-Agent）辯論系統提供集體智慧與高效協作能力。
+本文件說明本專案升級後的「海馬迴記憶架構 (Hippocampal Memory Architecture)」，該架構整合了短期感知、長期知識庫與自動鞏固機制，旨在為多智能體（Multi-Agent）辯論系統提供集體智慧與高效協作能力。
 
-## 核心架構：海馬體 (Hippocampal Memory)
+## 核心架構：海馬迴 (Hippocampal Memory)
 
-我們引入了 `HippocampalMemory` 類別作為記憶系統的核心，模仿人腦海馬體的功能，負責將短期的感知輸入（Sensory Input）轉化為長期的穩定記憶（Long-term Memory）。
+我們引入了 `HippocampalMemory` 類別作為記憶系統的核心，模仿人腦海馬迴的功能，負責將短期的感知輸入（Sensory Input）轉化為長期的穩定記憶（Long-term Memory）。
 
 ### 三層記憶結構
 
@@ -28,6 +28,22 @@
     *   **Semantic (語義)**：意圖匹配 (Vector)。
     *   **Temporal (時間)**：資料產生的時間戳，支援 `Date Range` 查詢。
     *   **Source (來源)**：記錄 Agent ID 與 Tool Name，支援來源過濾。
+
+### 記憶作用範圍 (Memory Scope)
+
+為了確保辯論的獨立性與效率，海馬體具有明確的作用範圍：
+
+1.  **場次範圍 (Session Scope)**：**Per-Debate 隔離**。
+    *   每個辯論場次 (`debate_id`) 擁有獨立的 Redis 空間與向量集合 (`hippocampus_{debate_id}`)。
+    *   不同場次間的記憶互不相通，確保每場辯論從乾淨的狀態開始（除非透過 Task LTM 查詢歷史案例）。
+
+2.  **參與者範圍 (Participant Scope)**：**Session 內全域共享**。
+    *   同一場辯論內的所有 Agent（正方、反方、主席）共享同一個海馬體實例。
+    *   **效益**：正方查過的資料（如台積電股價），反方可直接取用（Cache Hit），極大化提升效率並減少重複的 API 開銷。
+
+3.  **資料範圍 (Data Scope)**：**工具執行結果 (Tool Outputs)**。
+    *   專注於快取客觀事實與查詢結果。
+    *   **負面快取 (Negative Caching)**：系統**會**快取「空結果」或「錯誤結果」。若某個 Agent 搜尋不存在的公司（如 "3444"）返回空值，此結果會被寫入記憶。後續 Agent 再次搜尋時將直接命中快取並得知「無結果」，避免陷入重複執行無效工具的邏輯迴圈。
 
 ---
 
@@ -58,7 +74,7 @@
     *   在 `debater.system_instruction` 與 `debater.tool_instruction` 中加入了明確指令，強烈建議 Agent 在進行耗時調查前先查詢共享記憶，避免重複勞動。
 
 3.  **延長申請攔截 (Extension Interception)**
-    *   當 Agent 申請延長調查（`request_extension`）時，系統會**強制**先查詢海馬體記憶。
+    *   當 Agent 申請延長調查（`request_extension`）時，系統會**強制**先查詢海馬迴記憶。
     *   若系統發現共享記憶中已有 Agent 所需的資訊（基於申請理由匹配），將**自動駁回**申請，並直接提供相關記憶內容。
     *   這充當了「知識守門員」，防止 Agent 因為不知道隊友已經查過而浪費資源。
 
@@ -67,7 +83,7 @@
 ## 舊版相容性說明
 
 *   **ReMe* 類別**：原有的 `ReMePersonalLongTermMemory`, `ReMeTaskLongTermMemory` 等類別保留用於特定用途（如個人偏好），但核心的工具結果儲存已由 `HippocampalMemory` 接管。
-*   **LLM 語意快取**：`worker/llm_utils.py` 中的 LLM 回應快取機制保持不變，與海馬體並行運作（前者快取「思考」，後者快取「感知/工具」）。
+*   **LLM 語意快取**：`worker/llm_utils.py` 中的 LLM 回應快取機制保持不變，與海馬迴並行運作（前者快取「思考」，後者快取「感知/工具」）。
 
 ---
 

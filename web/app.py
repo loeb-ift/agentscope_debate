@@ -472,20 +472,32 @@ def get_tool_choices():
     except:
         return []
 
-def list_companies():
+def list_companies(sector=None, group=None, sub_industry=None):
     try:
-        response = requests.get(f"{API_URL}/internal/companies")
+        params = {}
+        if sector: params['sector'] = sector
+        if group: params['group'] = group
+        if sub_industry: params['sub_industry'] = sub_industry
+        
+        response = requests.get(f"{API_URL}/internal/companies", params=params)
         response.raise_for_status()
         companies = response.json()
         
         data = []
         for c in companies:
-            data.append([c['company_id'], c['company_name'], c['ticker_symbol'], c['industry_sector']])
+            data.append([
+                c['company_id'], 
+                c['company_name'], 
+                c['ticker_symbol'], 
+                c['industry_sector'],
+                c.get('industry_group', ''),
+                c.get('sub_industry', '')
+            ])
         
         if not data:
-             return pd.DataFrame(columns=["ID", "Name", "Ticker", "Sector"])
+             return pd.DataFrame(columns=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"])
         
-        return pd.DataFrame(data, columns=["ID", "Name", "Ticker", "Sector"])
+        return pd.DataFrame(data, columns=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"])
     except Exception as e:
         return pd.DataFrame({"error": [str(e)]})
 
@@ -676,6 +688,48 @@ def get_config_keys():
     config = get_system_config()
     return list(config.keys()) if config else []
 
+def get_industry_tree_data():
+    try:
+        response = requests.get(f"{API_URL}/internal/industry-tree")
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error fetching industry tree: {e}")
+        return {}
+
+def get_sector_choices():
+    try:
+        response = requests.get(f"{API_URL}/internal/sectors")
+        response.raise_for_status()
+        sectors = response.json()
+        return sectors
+    except:
+        return []
+
+def get_company_update_status():
+    try:
+        response = requests.get(f"{API_URL}/internal/companies/last-update")
+        data = response.json()
+        last_update = data.get("last_update")
+        if not last_update:
+            return "從未更新", False
+        
+        # Check if older than 90 days
+        from datetime import datetime, timedelta
+        dt = datetime.fromisoformat(last_update)
+        is_old = (datetime.now() - dt) > timedelta(days=90)
+        return last_update, is_old
+    except:
+        return "未知", False
+
+def trigger_company_update():
+    try:
+        response = requests.post(f"{API_URL}/internal/companies/update-from-web")
+        response.raise_for_status()
+        return "更新任務已啟動 (後台執行中)..."
+    except Exception as e:
+        return f"啟動失敗: {e}"
+
 def update_system_config(key, value):
     try:
         response = requests.post(f"{API_URL}/config", json={"key": key, "value": value})
@@ -815,6 +869,7 @@ def main():
                                     
                                     debate_status_output = gr.Textbox(label="啟動狀態")
                                     task_id_state = gr.State()
+                                    # live log moved to right column
 
                                 # Step 4 removed
 
@@ -1113,6 +1168,7 @@ def main():
                                 team_name = gr.Textbox(label="團隊名稱", placeholder="e.g., Growth Team")
                                 team_desc = gr.Textbox(label="描述", placeholder="Focus on technology and innovation")
                                 team_members = gr.Dropdown(label="選擇成員 (Agent)", multiselect=True, choices=[])
+                                team_validation_msg = gr.Markdown(value="") # Validation feedback
                                 
                                 with gr.Row():
                                     cancel_team_btn = gr.Button("⬅️ 取消 / 返回列表")
@@ -1126,6 +1182,79 @@ def main():
                                 
                                 def update_member_dropdown():
                                     return gr.update(choices=get_agent_choices())
+
+                                def check_team_balance(member_ids):
+                                    """
+                                    檢查團隊組成的平衡性 (Overlap & Complementarity)
+                                    """
+                                    if not member_ids: return ""
+                                    
+                                    # Fetch agents details
+                                    # Since we need specialty text, we need full agent objects.
+                                    # _CORE_DATA_CACHE might be stale or partial if not preloaded.
+                                    # But we can try to fetch if cache miss.
+                                    
+                                    # For simplicity, fetch all agents (it's cached in _get_cached_or_fetch)
+                                    all_agents = get_agents()
+                                    selected_agents = [a for a in all_agents if a['id'] in member_ids]
+                                    
+                                    if not selected_agents:
+                                        return ""
+
+                                    roles = [a.get('role', 'unknown').lower() for a in selected_agents]
+                                    specialties = [a.get('specialty', '') for a in selected_agents]
+                                    names = [a.get('name', 'Unknown') for a in selected_agents]
+                                    
+                                    warnings = []
+                                    
+                                    # 1. 人數警告 (Lean Teams)
+                                    if len(member_ids) > 2:
+                                        warnings.append("⚠️ **人數過多**：建議每隊不超過 2 人以達最佳協調效能。人多可能導致觀點重複與協調內耗。")
+
+                                    # 2. 角色重疊檢查 (Overlap)
+                                    from collections import Counter
+                                    role_counts = Counter(roles)
+                                    for role, count in role_counts.items():
+                                        if count > 1:
+                                            # Check specialty similarity via API
+                                            # Filter agents with this role
+                                            same_role_indices = [i for i, r in enumerate(roles) if r == role]
+                                            same_role_specs = [specialties[i] for i in same_role_indices]
+                                            same_role_names = [names[i] for i in same_role_indices]
+                                            
+                                            # If any specialty is empty, can't compare properly, just warn about role
+                                            if any(not s.strip() for s in same_role_specs):
+                                                 warnings.append(f"⚠️ **角色重疊**：已選擇 {count} 位 '{role}'。建議多元化配置。")
+                                            else:
+                                                try:
+                                                    # Call Backend Similarity API
+                                                    resp = requests.post(f"{API_URL}/internal/similarity", json={"texts": same_role_specs}, timeout=3)
+                                                    if resp.status_code == 200:
+                                                        matrix = resp.json()['matrix']
+                                                        found_high_sim = False
+                                                        for i in range(len(matrix)):
+                                                            for j in range(i+1, len(matrix)):
+                                                                if matrix[i][j] > 0.85:
+                                                                    warnings.append(f"⚠️ **專長高度重疊**：'{same_role_names[i]}' 與 '{same_role_names[j]}' 的專長語意極為接近 (相似度 {matrix[i][j]:.0%})。建議更換以增加觀點多樣性。")
+                                                                    found_high_sim = True
+                                                        if not found_high_sim:
+                                                            # Role overlap but specialty diff -> OK-ish, but still worth a hint
+                                                            pass
+                                                    else:
+                                                        warnings.append(f"⚠️ **角色重疊**：已選擇 {count} 位 '{role}'。")
+                                                except:
+                                                    # API fail, fallback
+                                                    warnings.append(f"⚠️ **角色重疊**：已選擇 {count} 位 '{role}'。")
+
+                                    # 3. 互補性檢查 (Complementarity)
+                                    if "debater" in roles:
+                                        if not any(r in ["analyst", "researcher", "quant", "risk_officer"] for r in roles):
+                                            warnings.append("💡 **互補建議**：團隊擁有辯手，但缺乏數據專家 (Analyst/Quant)。建議加入以強化論證深度。")
+                                            
+                                    if "chairman" in roles:
+                                        warnings.append("❌ **配置錯誤**：主席角色 (Chairman) 通常不應加入辯論團隊，應擔任裁判。")
+
+                                    return "\n\n".join(warnings) if warnings else "✅ **團隊結構配置均衡**"
 
                                 def load_team_to_edit(team_id):
                                     if not team_id:
@@ -1160,6 +1289,9 @@ def main():
                                 
                                 # Auto-refresh
                                 team_list_tab.select(update_team_dropdown, outputs=selected_team_id)
+                                
+                                # Validation Hook
+                                team_members.change(check_team_balance, inputs=[team_members], outputs=[team_validation_msg])
 
                                 load_team_btn.click(
                                     load_team_to_edit,
@@ -1477,7 +1609,7 @@ def main():
                                 # Logic
                                 def refresh_tool_choices():
                                     return gr.update(choices=get_all_tool_names())
-
+                                
                                 def update_toolset_dropdown():
                                     return gr.update(choices=get_toolset_choices())
 
@@ -1621,7 +1753,93 @@ def main():
                                 demo.load(update_term_dropdown, outputs=edit_term_id)
 
             # ==============================
-            # Tab 3: 📝 提示詞控制台 (Prompt Console)
+            # Tab 3: ⛓️ 產業鏈管理 (Industry Chain)
+            # ==============================
+            with gr.TabItem("⛓️ 產業鏈管理"):
+                
+                # --- Status Bar ---
+                with gr.Row(variant="panel"):
+                    update_status_md = gr.Markdown("檢查更新狀態...")
+                    update_btn = gr.Button("🚀 立即更新產業資料")
+                
+                def check_update_status():
+                    last_update, is_old = get_company_update_status()
+                    msg = f"### 📅 資料最後更新: {last_update}"
+                    if is_old:
+                        msg += "\n\n⚠️ **資料已超過 90 天未更新，建議立即更新！**"
+                    else:
+                        msg += "\n\n✅ 資料尚新。"
+                    return msg
+
+                demo.load(check_update_status, outputs=update_status_md)
+                update_btn.click(trigger_company_update, outputs=None).then(
+                    lambda: "🔄 更新中... 請稍後刷新頁面查看時間。", outputs=update_status_md
+                )
+
+                with gr.Tabs():
+                    with gr.TabItem("🗺️ 產業地圖"):
+                        with gr.Row():
+                            sector_select = gr.Dropdown(label="選擇產業 (Sector)", choices=[], allow_custom_value=True)
+                            refresh_tree_btn = gr.Button("🔄 刷新地圖")
+                        
+                        tree_view = gr.JSON(label="產業結構樹 (Sector -> Stream -> Companies)")
+                        
+                        def update_sector_choices():
+                            return gr.update(choices=get_sector_choices())
+                        
+                        def load_tree(sector):
+                            if not sector:
+                                return {"info": "請選擇一個產業以檢視結構圖 (Select a sector to view details)"}
+                            
+                            # Only fetch full tree if really needed, or better yet, if we had an API for single sector
+                            # Since we only have full tree API, we still have to fetch it, but at least we don't render it all at once
+                            # Optimization: The backend is cached now, so fetching is fast (0.1s).
+                            # The rendering of a massive JSON in browser is the bottleneck.
+                            # By forcing a sector selection, we limit the rendered JSON size significantly.
+                            full_tree = get_industry_tree_data()
+                            return {sector: full_tree.get(sector, {})}
+                        
+                        refresh_tree_btn.click(update_sector_choices, outputs=sector_select).then(
+                            load_tree, inputs=[sector_select], outputs=tree_view
+                        )
+                        sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
+                        
+                        # Init
+                        demo.load(update_sector_choices, outputs=sector_select)
+                        # Remove auto-load of full tree on startup
+                        # demo.load(load_tree, inputs=[sector_select], outputs=tree_view)
+
+                    with gr.TabItem("📋 公司列表與管理"):
+                        with gr.Row():
+                            filter_sector = gr.Dropdown(label="篩選產業", choices=[], allow_custom_value=True)
+                            filter_group = gr.Dropdown(label="篩選環節 (Stream)", choices=["上游", "中游", "下游"], allow_custom_value=True)
+                            filter_sub = gr.Textbox(label="篩選子產業 (Sub-industry)")
+                            refresh_list_btn = gr.Button("🔍 搜尋 / 刷新")
+                        
+                        company_list_table = gr.DataFrame(
+                            headers=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"],
+                            interactive=False,
+                            wrap=True
+                        )
+                        
+                        def update_list(sec, grp, sub):
+                            return list_companies(sec, grp, sub)
+                            
+                        def update_filter_choices():
+                            return gr.update(choices=get_sector_choices())
+
+                        refresh_list_btn.click(
+                            update_list,
+                            inputs=[filter_sector, filter_group, filter_sub],
+                            outputs=company_list_table
+                        )
+                        
+                        # Sync choices
+                        demo.load(update_filter_choices, outputs=filter_sector)
+                        demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=company_list_table)
+
+            # ==============================
+            # Tab 4: 📝 提示詞控制台 (Prompt Console)
             # ==============================
             with gr.TabItem("📝 提示詞控制台"):
                 with gr.Row():
@@ -1665,9 +1883,9 @@ def main():
                 refresh_prompts_btn.click(list_prompts, outputs=prompts_table)
                 demo.load(list_prompts, outputs=prompts_table)
                 demo.load(update_prompt_dropdown, outputs=prompt_key_dropdown)
-
+            
             # ==============================
-            # Tab 4: 📜 歷史復盤 (History Replay)
+            # Tab 5: 📜 歷史復盤 (History Replay)
             # ==============================
             with gr.TabItem("📜 歷史復盤"):
                 with gr.Row():
@@ -1715,7 +1933,7 @@ def main():
                 demo.load(update_replay_list, outputs=replay_file_dropdown)
             
             # ==============================
-            # Tab 5: ⚙️ 系統設置 (Settings)
+            # Tab 6: ⚙️ 系統設置 (Settings)
             # ==============================
             with gr.TabItem("⚙️ 系統設置"):
                 gr.Markdown("### 系統環境變數設置 (.env)")
@@ -1725,7 +1943,7 @@ def main():
                     refresh_config_btn = gr.Button("🔄 刷新配置")
                     save_config_btn = gr.Button("💾 保存所有修改", variant="primary")
                 
-                config_table = gr.DataFrame(
+                sys_config_df = gr.DataFrame(
                     headers=["配置項 (Key)", "數值 (Value)", "說明 (Description)"],
                     datatype=["str", "str", "str"],
                     col_count=(3, "fixed"),
@@ -1779,16 +1997,16 @@ def main():
                     except Exception as e:
                         return f"保存失敗: {e}"
 
-                refresh_config_btn.click(load_config_data, outputs=config_table)
+                refresh_config_btn.click(load_config_data, outputs=sys_config_df)
                 
                 save_config_btn.click(
                     save_config_data,
-                    inputs=[config_table],
+                    inputs=[sys_config_df],
                     outputs=[config_msg]
-                ).then(load_config_data, outputs=config_table)
+                ).then(load_config_data, outputs=sys_config_df)
                 
                 # Init
-                demo.load(load_config_data, outputs=config_table)
+                demo.load(load_config_data, outputs=sys_config_df)
 
     return demo
 
@@ -1798,4 +2016,3 @@ if __name__ == "__main__":
     
     demo = main()
     demo.queue().launch(server_name="0.0.0.0", server_port=7860)
-

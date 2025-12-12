@@ -722,3 +722,21 @@ chairman.pre_debate_analysis: |
   ---
 
   **現在，請提供你的辯題，我將執行完整的整合式分析！** ⏰📊🏢🎯
+
+  **[強制指令] 輸出格式規範：**
+  你必須且只能輸出一段合法的 JSON 代碼。
+  請嚴格遵守以下 JSON 結構（注意冒號後面的值必須是字串或數字，不能有多餘的冒號）：
+
+  ```json
+  {
+      "step1_type_classification": "...",
+      "step2_core_elements": "...",
+      "step5_summary": "...",
+      "step6_handcard": "..."
+  }
+  ```
+
+  **錯誤範例（絕對禁止）：**
+  ❌ {"key": "name": "value"}  <- 錯誤！這是雙重冒號
+  ✅ {"key": "name: value"}     <- 正確，放在字串內
+  ✅ {"key": {"name": "value"}} <- 正確，巢狀物件

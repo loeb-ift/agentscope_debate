@@ -11,7 +11,7 @@ class DatabaseToolBase(ToolAdapter):
 class SearchCompany(DatabaseToolBase):
     name = "internal.search_company"
     version = "v1"
-    description = "從內部資料庫搜尋公司資料。可使用名稱或代碼。返回公司 ID、名稱、Ticker、產業別與市值。"
+    description = "從內部資料庫搜尋公司資料。可使用名稱或代碼。返回公司 ID、名稱、Ticker、產業別 (Sector)、產業環節 (Group) 與子產業 (Sub-industry)。"
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -59,6 +59,8 @@ class SearchCompany(DatabaseToolBase):
                     "name": r.company_name,
                     "ticker": r.ticker_symbol,
                     "sector": r.industry_sector,
+                    "group": r.industry_group, # Stream (Up/Mid/Down)
+                    "sub_industry": r.sub_industry,
                     "market_cap": float(r.market_cap) if r.market_cap else None
                 })
             
@@ -102,7 +104,17 @@ class GetCompanyDetails(DatabaseToolBase):
 
         db = self.get_db()
         try:
+            # 1. Try exact match on company_id
             company = db.query(financial_models.Company).filter(financial_models.Company.company_id == company_id).first()
+            
+            # 2. Try adding .TW suffix if not found and not present
+            if not company and not company_id.endswith(".TW"):
+                company = db.query(financial_models.Company).filter(financial_models.Company.company_id == f"{company_id}.TW").first()
+                
+            # 3. Try matching ticker_symbol
+            if not company:
+                company = db.query(financial_models.Company).filter(financial_models.Company.ticker_symbol == company_id).first()
+                
             if not company:
                 return {"error": f"Company not found with ID: {company_id}"}
             

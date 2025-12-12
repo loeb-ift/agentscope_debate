@@ -9,7 +9,7 @@ import yaml
 import asyncio
 import resource
 import difflib
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from worker.llm_utils import call_llm, call_llm_async
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
@@ -41,6 +41,8 @@ class DebateCycle:
         self.archived_summaries = [] # List of structured summaries
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
         self.hippocampus = HippocampalMemory(debate_id) # Init Hippocampal Memory
+        # Log de-duplication cache: key -> {"last_ts": datetime, "suppressed": int}
+        self._log_dedupe: Dict[str, Dict[str, Any]] = {}
 
     def _get_memory_usage(self) -> str:
         """獲取當前記憶體使用量 (MB)"""
@@ -56,8 +58,53 @@ class DebateCycle:
     def _publish_log(self, role: str, content: str):
         """
         發布日誌到 Redis，供前端 SSE 訂閱。
+        具備去重與節流：
+        - 同一 role+content 在 1 秒內重複，將被抑制並累計 suppressed 計數。
+        - 下一次允許的輸出會附帶 "(previous N duplicates suppressed)" 註記。
         """
-        message = json.dumps({"role": role, "content": content}, ensure_ascii=False)
+        # Ensure timestamp is Asia/Taipei (GMT+8)
+        tz_taipei = timezone(timedelta(hours=8))
+        now = datetime.now(timezone.utc).astimezone(tz_taipei)
+        timestamp = now.strftime("%H:%M:%S")
+
+        # De-duplication key
+        key = f"{role}|{content}"
+        entry = self._log_dedupe.get(key)
+        allow_publish = True
+        suppressed_note = ""
+        dedupe_window_seconds = 1.0
+
+        if entry:
+            last_ts = entry.get("last_ts")
+            suppressed = entry.get("suppressed", 0)
+            # If within the dedupe window, suppress
+            if last_ts and (now - last_ts).total_seconds() < dedupe_window_seconds:
+                entry["suppressed"] = suppressed + 1
+                entry["last_ts"] = now
+                self._log_dedupe[key] = entry
+                allow_publish = False
+            else:
+                # Outside the window: if there were suppressed duplicates, annotate once
+                if suppressed:
+                    suppressed_note = f" (previous {suppressed} duplicates suppressed)"
+                # Reset counter and publish
+                entry["suppressed"] = 0
+                entry["last_ts"] = now
+                self._log_dedupe[key] = entry
+        else:
+            # First time seeing this message
+            self._log_dedupe[key] = {"last_ts": now, "suppressed": 0}
+
+        if not allow_publish:
+            return
+        
+        # Add timestamp to console log
+        print(f"[{timestamp}] {role}: {content[:100]}...{suppressed_note}")
+        
+        # Add timestamp to UI content
+        ui_content = f"[{timestamp}] {content}{suppressed_note}"
+        
+        message = json.dumps({"role": role, "content": ui_content}, ensure_ascii=False)
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", message)
 
     def _publish_progress(self, percentage: int, message: str, stage: str = "setup"):
@@ -219,6 +266,12 @@ class DebateCycle:
             print(f"DEBUG: Cleared semantic cache for debate {self.debate_id}")
         except Exception as e:
             print(f"WARNING: Failed to clear semantic cache: {e}")
+
+        # [Duration Stats]
+        total_duration = datetime.now() - start_time
+        duration_msg = f"🏁 辯論結束。總耗時: {str(total_duration).split('.')[0]}"
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {duration_msg}")
+        self._publish_log("System", duration_msg)
 
         # Send explicit DONE signal to close the stream
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", "[DONE]")
@@ -468,11 +521,11 @@ class DebateCycle:
             await rag.add_turn_async(f"{team_name} Summary", team_summary, round_num)
             
         # [Hippocampus] Trigger Memory Consolidation
-        self._publish_log("System", "🧠 正在進行海馬體記憶鞏固 (Consolidating Working Memory)...")
+        self._publish_log("System", "🧠 正在進行海馬迴記憶鞏固 (Consolidating Working Memory)...")
         await self.hippocampus.consolidate()
 
         # [Hippocampus] Trigger Memory Consolidation
-        self._publish_log("System", "🧠 正在進行海馬體記憶鞏固 (Consolidating Working Memory)...")
+        self._publish_log("System", "🧠 正在進行海馬迴記憶鞏固 (Consolidating Working Memory)...")
         await self.hippocampus.consolidate()
 
         # 3. 主席彙整與下一輪方向
@@ -850,7 +903,8 @@ class DebateCycle:
         base_max_steps = int(os.getenv("MAX_AGENT_TOOL_STEPS", 5))
         extension_steps = int(os.getenv("EXTENSION_STEPS", 3))
         max_steps = base_max_steps
-        has_extended = False
+        extensions_used = 0
+        last_extension_reason = ""
         
         current_step = 0
         current_prompt = user_prompt
@@ -864,7 +918,37 @@ class DebateCycle:
                 response = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
                 print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
 
+                # --- [Optimization Phase 3] Pre-Flight Check (Output Validation) ---
+                # 簡單的輸出檢查，攔截明顯錯誤
+                validation_error = None
+                
+                # 1. Empty Check
+                if not response or len(response.strip()) < 5:
+                    validation_error = "Response too short or empty."
+                
+                # 2. Hallucination Check (Basic Ticker Validation)
+                # If agent explicitly cites a ticker format "Ticker: XXXX" or "代碼: XXXX"
+                # We verify if it looks like a valid format (e.g., 4 digits for TW stock)
+                # This is a soft check to prevent blatant hallucinations of format.
+                ticker_matches = re.findall(r'(?:Ticker|代碼)[:：]\s*([0-9A-Z]+)', response, re.IGNORECASE)
+                for t in ticker_matches:
+                    if t.isdigit() and len(t) != 4: # TW stock usually 4 digits
+                         # This might be too strict for other markets, so we be careful.
+                         # Just flagging 3-digit numbers as suspicious for TW context.
+                         if len(t) < 4:
+                             validation_error = f"Suspicious ticker format '{t}'. TW stocks usually have 4 digits."
+                
+                # If validation failed, reject and ask to retry (without consuming a step? or consume?)
+                # We consume a step to prevent infinite loops of bad output.
+                if validation_error and "tool" not in response: # Skip check for tool calls (JSON)
+                     print(f"❌ Output Validation Failed for {agent.name}: {validation_error}")
+                     self._publish_log(f"{agent.name} (System)", f"⚠️ 輸出被攔截：{validation_error}")
+                     current_prompt = f"系統提示：你的上一次輸出被拒絕，原因：{validation_error}。\n請修正後重新輸出。"
+                     continue
+                # -------------------------------------------------------------------
+
                 # Retry 機制 (Only for empty response on first step)
+                # (Merged into validation above, but keeping logic flow)
                 if not response and current_step == 1:
                     print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
                     retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
@@ -961,7 +1045,13 @@ class DebateCycle:
                             
                             if cached_result:
                                 tool_result = cached_result['result']
-                                self._publish_log(f"{agent.name} (Memory)", f"🧠 從海馬體短期記憶中獲取了結果 (Access: {cached_result['access_count']})")
+                                # Create a preview string for debugging
+                                try:
+                                    result_str = json.dumps(tool_result, ensure_ascii=False)
+                                except:
+                                    result_str = str(tool_result)
+                                # Show FULL content for debugging as requested
+                                self._publish_log(f"{agent.name} (Memory)", f"🧠 從海馬迴短期記憶中獲取了結果 (Access: {cached_result['access_count']}) 『{result_str}』")
                             else:
                                 # 2. Execute Tool (Sensory Input)
                                 from worker.tool_invoker import call_tool
@@ -970,7 +1060,7 @@ class DebateCycle:
                                 
                                 # 3. Store in Working Memory
                                 await self.hippocampus.store(agent.name, tool_name, params, tool_result)
-                                self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬體。")
+                                self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬迴。")
                             
                             # Publish Tool Result Preview to Log Stream
                             result_preview_log = str(tool_result)
@@ -1092,10 +1182,11 @@ class DebateCycle:
                     return response
             
             # --- Loop Limit Reached ---
-            # Allow one-time extension request
-            if not has_extended:
-                print(f"INFO: Agent {agent.name} reached base limit. Offering extension.")
-                self._publish_log(f"{agent.name} (System)", "⚠️ 基礎調查次數已用盡。正在詢問是否需要延長調查...")
+            # Allow multiple extension requests (Auto-Approve first 2, then Chairman Review)
+            # Limit total extensions to prevent infinite loop (e.g., max 3 times total)
+            if extensions_used < 3:
+                print(f"INFO: Agent {agent.name} reached step limit ({max_steps}). Offering extension ({extensions_used+1}/3).")
+                self._publish_log(f"{agent.name} (System)", "⚠️ 調查次數已用盡。正在詢問是否需要延長調查...")
                 
                 # Externalized Prompt
                 db = SessionLocal()
@@ -1116,22 +1207,54 @@ class DebateCycle:
                         req = json.loads(json_match.group(0))
                         if req.get("tool") == "request_extension":
                             reason = req.get("params", {}).get("reason", "無理由")
-                            self._publish_log(f"{agent.name} (Request)", f"申請延長調查：{reason}")
+                            self._publish_log(f"{agent.name} (Request)", f"申請延長調查 ({extensions_used+1}/3)：{reason}")
                             
-                            # [Hippocampus] Check Shared Memory before bothering Chairman
-                            self._publish_log("System", f"🧠 正在查詢海馬體記憶以驗證延長需求...")
+                            # [Hippocampus] Check Shared Memory first
+                            self._publish_log("System", f"🧠 正在查詢海馬迴記憶以驗證延長需求...")
                             mem_results = await self.hippocampus.search_shared_memory(query=reason, limit=3)
                             
-                            # Heuristic: If "No relevant memories" is NOT in the result, it means we found something.
-                            # Ideally search_shared_memory should return a list or structured object, but it returns a string currently.
-                            # We can check if the result string length implies found content.
-                            
                             if "No relevant memories" not in mem_results and len(mem_results) > 50:
-                                self._publish_log("System", f"✅ 海馬體中發現相關資訊，延長申請自動駁回並提供資訊。")
+                                self._publish_log("System", f"✅ 海馬迴中發現相關資訊，延長申請自動駁回並提供資訊。")
                                 current_prompt = f"【系統提示】延長申請已自動駁回，因為在共享記憶中發現了相關資訊：\n\n{mem_results}\n\n請利用這些資訊繼續你的論述或總結。"
                                 continue # Back to agent loop
                             
-                            # Call Chairman for Review
+                            # --- [Optimization Phase 1] Auto-Approve Logic ---
+                            should_auto_approve = False
+                            deny_reason_auto = ""
+                            
+                            # Only auto-approve first 2 times
+                            if extensions_used < 2:
+                                # 1. Substantiality Check
+                                filler_words = ["need time", "more steps", "process", "thinking", "continue", "investigate", "research"]
+                                is_only_filler = any(w in reason.lower() for w in filler_words) and len(reason) < 25
+                                has_specifics = any(c.isupper() for c in reason) or any(c.isdigit() for c in reason)
+                                
+                                # 2. Repetition Check
+                                is_repeated = (reason.strip() == last_extension_reason.strip())
+                                
+                                if len(reason) < 10:
+                                    deny_reason_auto = "理由過短"
+                                elif is_repeated:
+                                    deny_reason_auto = "理由重複"
+                                elif is_only_filler and not has_specifics:
+                                    deny_reason_auto = "缺乏具體細節 (需包含實體或數據)"
+                                else:
+                                    should_auto_approve = True
+                            
+                            if should_auto_approve:
+                                self._publish_log("System (Auto-Approve)", f"✅ 系統自動批准延長 (符合自動放行標準)。")
+                                max_steps += extension_steps
+                                extensions_used += 1
+                                last_extension_reason = reason
+                                current_prompt = f"系統已自動批准你的延長申請。\n增加了 {extension_steps} 次調用機會。\n請繼續調查。"
+                                continue # Back to agent loop
+                            
+                            if extensions_used < 2 and not should_auto_approve:
+                                self._publish_log("System (Auto-Approve)", f"⚠️ 自動批准拒絕 ({deny_reason_auto})，轉交主席審核...")
+
+                            # --- End Auto-Approve ---
+
+                            # Call Chairman for Review (Fallback)
                             db = SessionLocal()
                             try:
                                 review_template = PromptService.get_prompt(db, "debate.chairman_review_extension")
@@ -1160,7 +1283,8 @@ class DebateCycle:
                                 res_json = json.loads(re.search(r'\{.*\}', chairman_res, re.DOTALL).group(0))
                                 if res_json.get("approved"):
                                     max_steps += extension_steps
-                                    has_extended = True
+                                    extensions_used += 1
+                                    last_extension_reason = reason
                                     self._publish_log("Chairman (Review)", f"✅ 批准延長：{res_json.get('reason')}")
                                     
                                     # Update prompt with guidance

@@ -2,11 +2,12 @@ import json
 import os
 import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from api.vector_store import VectorStore
 from api.redis_client import get_redis_client
 import time
 import hashlib
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ os.makedirs(MEMORY_DIR, exist_ok=True)
 
 class HippocampalMemory:
     """
-    海馬體記憶系統 (Hippocampal Memory Architecture)
+    海馬迴記憶系統 (Hippocampal Memory Architecture)
     
     整合短期記憶 (Working Memory) 與長期記憶 (Long-term Memory)，
     並提供多維度索引檢索功能。
@@ -44,6 +45,7 @@ class HippocampalMemory:
         """
         感知層入口：將工具執行結果存入工作記憶 (Working Memory)。
         """
+        start = time.time()
         key = self._get_wm_key(tool, params)
         timestamp = time.time()
         
@@ -71,26 +73,40 @@ class HippocampalMemory:
             # Result might be same, but we update metadata
             memory_item = data
         
+        # [Strategy Change: Enable Negative Caching]
+        # We NOW cache empty results/errors to prevent "Insanity" (doing the same thing over and over expecting different results).
+        # If a search returns nothing, the system should remember "we searched this, and found nothing".
+        
+        # DEBUG: Log incoming result type/content
+        # logger.info(f"DEBUG: Storing WM for {tool}. Type: {type(result)}. Content: {str(result)[:100]}")
+
         self.redis.set(key, json.dumps(memory_item, default=str), ex=86400)
         
         # If access count is high enough, we might trigger immediate consolidation or wait for batch
         # For now, we just store. Consolidation happens periodically.
         
-        logger.info(f"Hippocampus stored WM: {tool} (Access: {memory_item['access_count']})")
+        elapsed = time.time() - start
+        logger.info(f"Hippocampus stored WM: {tool} (Access: {memory_item['access_count']}) in {elapsed:.4f}s")
 
     async def retrieve_working_memory(self, tool: str, params: dict) -> Optional[Dict]:
         """
         從工作記憶檢索 (Exact Match)。
         """
+        start = time.time()
         key = self._get_wm_key(tool, params)
         data = self.redis.get(key)
+        elapsed = time.time() - start
+        
         if data:
             item = json.loads(data)
             # Update access stats
             item["access_count"] += 1
             item["last_accessed"] = time.time()
             self.redis.set(key, json.dumps(item), ex=86400)
+            logger.info(f"Hippocampus WM HIT: {tool} in {elapsed:.4f}s")
             return item
+            
+        logger.info(f"Hippocampus WM MISS: {tool} in {elapsed:.4f}s")
         return None
 
     async def consolidate(self):
