@@ -14,23 +14,26 @@ from worker.llm_utils import call_llm, call_llm_async
 from worker.tool_config import get_tools_description, get_tools_examples, STOCK_CODES, CURRENT_DATE
 from api.prompt_service import PromptService
 from api.database import SessionLocal
+import hashlib
 from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory, ReMeHistoryMemory, HippocampalMemory
 from api.tool_registry import tool_registry
 from api.toolset_service import ToolSetService
 from api.redis_client import get_redis_client
 from api import models
+from mars.types.errors import ToolError, ToolRecoverableError, ToolTerminalError, ToolFatalError, TejErrorType
 
 class DebateCycle:
     """
     管理整个辩论循环，包括主席引导、正反方发言和总结。
     """
 
-    def __init__(self, debate_id: str, topic: str, chairman: Chairman, teams: List[Dict], rounds: int):
+    def __init__(self, debate_id: str, topic: str, chairman: Chairman, teams: List[Dict], rounds: int, enable_cross_examination: bool = True):
         self.debate_id = debate_id
         self.topic = topic
         self.chairman = chairman
         self.teams = teams # List of dicts: [{"name": "...", "side": "...", "agents": [AgentBase...]}]
         self.rounds = rounds
+        self.enable_cross_examination = enable_cross_examination
         self.redis_client = get_redis_client()
         self.evidence_key = f"debate:{self.debate_id}:evidence"
         self.rounds_data = []
@@ -41,8 +44,51 @@ class DebateCycle:
         self.archived_summaries = [] # List of structured summaries
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
         self.hippocampus = HippocampalMemory(debate_id) # Init Hippocampal Memory
+        self.latest_db_date = None # [Phase 18] Date Awareness Handshake
+        
+        # [Optimization] Persistent LTM instances for buffering
+        self.history_memory = ReMeHistoryMemory(debate_id)
+        self.tool_memory = ReMeToolLongTermMemory()
+        
+        # [Robustness] Failure Mode Memory
+        # Key: f"{agent_name}:{tool_name}:{error_type}" -> Value: {count, last_params_hash}
+        self._failure_memory: Dict[str, Dict[str, Any]] = {}
+        
+        # [Observability] Loop Sentinel
+        self._loop_sentinel: Dict[str, int] = {} # Key: signature -> count
+        
         # Log de-duplication cache: key -> {"last_ts": datetime, "suppressed": int}
         self._log_dedupe: Dict[str, Dict[str, Any]] = {}
+        
+        # [Debug] Setup debug log directory
+        self.debug_log_enabled = os.getenv("DEBUG_LOG_ENABLE", "false").lower() == "true"
+        if self.debug_log_enabled:
+            self.debug_log_dir = "debate_logs"
+            os.makedirs(self.debug_log_dir, exist_ok=True)
+            # [Realtime] Stream log file
+            self.stream_log_path = os.path.join(self.debug_log_dir, f"stream_{self.debate_id}.log")
+            self._log_to_file(f"=== Debate Stream Started: {self.debate_id} ===")
+        
+        # [Debug] Full Execution Trace
+        self.debug_trace: List[Dict[str, Any]] = []
+        
+        # [Observability Phase 6] Tool Stats
+        self.tool_stats = {
+            "count": 0,
+            "total_time": 0.0,
+            "estimated_cost": 0.0
+        }
+
+    def _log_to_file(self, message: str):
+        """Append message to the realtime stream log."""
+        if not self.debug_log_enabled or not hasattr(self, 'stream_log_path'):
+            return
+        try:
+            with open(self.stream_log_path, "a", encoding="utf-8") as f:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                f.write(f"[{timestamp}] {message}\n")
+        except Exception as e:
+            print(f"Failed to write to stream log: {e}")
 
     def _get_memory_usage(self) -> str:
         """獲取當前記憶體使用量 (MB)"""
@@ -101,11 +147,16 @@ class DebateCycle:
         # Add timestamp to console log
         print(f"[{timestamp}] {role}: {content[:100]}...{suppressed_note}")
         
+        # [Realtime] Log to file
+        self._log_to_file(f"[{role}] {content}{suppressed_note}")
+        
         # Add timestamp to UI content
         ui_content = f"[{timestamp}] {content}{suppressed_note}"
         
         message = json.dumps({"role": role, "content": ui_content}, ensure_ascii=False)
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", message)
+        # Persist log for late-joiners
+        self.redis_client.rpush(f"debate:{self.debate_id}:log_history", message)
 
     def _publish_progress(self, percentage: int, message: str, stage: str = "setup"):
         """
@@ -119,6 +170,74 @@ class DebateCycle:
             "timestamp": datetime.now().isoformat()
         }
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", json.dumps(event_data, ensure_ascii=False))
+
+    def _save_round_debug_log(self, round_num: int, team_summaries: Dict[str, str]):
+        """
+        Save detailed debug log for the current round (Appended to single file).
+        """
+        if not self.debug_log_enabled:
+            return
+
+        try:
+            # Use single file for the whole debate
+            filename = f"debate_debug_{self.debate_id}.txt"
+            filepath = os.path.join(self.debug_log_dir, filename)
+            
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"=== 第 {round_num} 輪除錯日誌 (Round {round_num} Debug Log) ===\n")
+                f.write(f"{'='*60}\n")
+                f.write(f"Debate ID: {self.debate_id}\n")
+                f.write(f"Topic: {self.topic}\n")
+                f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("--- 各團隊總結 (Team Summaries) ---\n")
+                for team, summary in team_summaries.items():
+                    f.write(f"[{team}]:\n{summary}\n\n")
+                
+                f.write("\n--- 近期對話歷史 (Detailed History - Recent) ---\n")
+                for item in self.history[-50:]: # Last 50 items
+                    f.write(f"[{item.get('role')}]: {str(item.get('content'))[:500]}...\n")
+                
+                f.write("\n--- 完整執行追蹤：LLM 輸入輸出與工具結果 (Full Execution Trace) ---\n")
+                
+                for i, trace in enumerate(self.debug_trace):
+                    f.write(f"\n[Trace #{i+1}] {trace.get('timestamp')}\n")
+                    f.write(f"Agent: {trace.get('agent')}\n")
+                    f.write(f"Step: {trace.get('step')}\n")
+                    f.write(f"Event: {trace.get('event')}\n")
+                    
+                    if "prompt" in trace:
+                        f.write(f"Full Prompt:\n{trace['prompt']}\n")
+                    if "response" in trace:
+                        f.write(f"LLM Response: {trace['response']}\n")
+                    if "tool" in trace:
+                        f.write(f"Tool Call: {trace['tool']} params={trace.get('params')}\n")
+                    if "result" in trace:
+                        # Full Result
+                        try:
+                            res_str = json.dumps(trace['result'], ensure_ascii=False, indent=2, default=str)
+                        except:
+                            res_str = str(trace['result'])
+                        f.write(f"Tool Result: {res_str}\n")
+                    f.write("-" * 40 + "\n")
+
+                f.write("\n--- 前端與系統日誌串流 (Frontend & System Logs) ---\n")
+                try:
+                    # Fetch all logs from Redis
+                    redis_logs = self.redis_client.lrange(f"debate:{self.debate_id}:log_history", 0, -1)
+                    for log_json in redis_logs:
+                        try:
+                            entry = json.loads(log_json)
+                            f.write(f"[{entry.get('role')}]: {entry.get('content')}\n")
+                        except:
+                            f.write(f"[Raw]: {log_json}\n")
+                except Exception as e:
+                    f.write(f"[Error fetching system logs]: {e}\n")
+
+            print(f"[Debug] Round {round_num} log saved to {filepath}")
+        except Exception as e:
+            print(f"[Debug] Failed to save debug log: {e}")
 
     def _save_report_to_file(self, conclusion: str, jury_report: str = None, start_time: datetime = None, end_time: datetime = None):
         """
@@ -186,7 +305,14 @@ class DebateCycle:
         self._publish_log("System", f"Debate '{self.debate_id}' has started.")
         self._publish_progress(5, "初始化辯論環境...", "init")
         
+        # 0.5 [Phase 18] Database Handshake (Date Awareness)
+        self._publish_progress(8, "正在檢測資料庫最新日期...", "init")
+        await self._check_db_date_async()
+
         # 0. 賽前分析
+        # [Phase 18] Database Handshake
+        await self._check_db_date_async()
+
         # Check Task LTM for similar past debates
         # [OPTIONAL] Disabled to avoid cold-start issues if not required
         # task_mem = ReMeTaskLongTermMemory()
@@ -197,8 +323,8 @@ class DebateCycle:
 
         self._publish_progress(10, "主席正在進行賽前分析...", "analysis")
         
-        # Note: Chairman analysis is still sync for now as it's complex, but could be made async too.
-        self.analysis_result = self.chairman.pre_debate_analysis(self.topic)
+        # Chairman analysis is now fully async
+        self.analysis_result = await self.chairman.pre_debate_analysis(self.topic, debate_id=self.debate_id)
         summary = self.analysis_result.get('step5_summary', '無')
         self.chairman.speak(f"賽前分析完成。戰略摘要：{summary}")
         self._publish_log("Chairman (Analysis)", f"賽前分析完成。\n戰略摘要：{summary}")
@@ -235,6 +361,10 @@ class DebateCycle:
             self._publish_log("System", f"--- Round {i} ---")
             round_result = await self._run_round_async(i)
             self.rounds_data.append(round_result)
+            
+            # [Phase 18] Chairman Emergency Mode (After Round 1)
+            if i == 1:
+                await self._check_and_trigger_emergency_mode(round_result)
         
         # 4. 最終總結
         handcard = self.analysis_result.get('step6_handcard') or self.analysis_result.get('step5_summary', '無手卡')
@@ -270,8 +400,39 @@ class DebateCycle:
         # [Duration Stats]
         total_duration = datetime.now() - start_time
         duration_msg = f"🏁 辯論結束。總耗時: {str(total_duration).split('.')[0]}"
+        
+        # [Phase 6] Cache Stats & Metrics
+        cache_stats = self.hippocampus.stats
+        total_reqs = cache_stats['wm_hits'] + cache_stats['wm_misses']
+        hit_rate = (cache_stats['wm_hits'] / total_reqs * 100) if total_reqs > 0 else 0
+        
+        # Semantic Cache Stats
+        from worker.llm_utils import _semantic_cache_buffer
+        sem_hits = _semantic_cache_buffer.stats["hits"]
+        sem_misses = _semantic_cache_buffer.stats["misses"]
+        sem_total = sem_hits + sem_misses
+        sem_hit_rate = (sem_hits / sem_total * 100) if sem_total > 0 else 0
+        
+        avg_latency = (self.tool_stats["total_time"] / self.tool_stats["count"]) if self.tool_stats["count"] > 0 else 0
+        
+        stats_msg = f"📊 Cache Stats: WM Hit {hit_rate:.1f}% | Sem Hit {sem_hit_rate:.1f}% | Saved Calls: {cache_stats['wm_hits'] + sem_hits}"
+        perf_msg = f"⚡ Perf: Avg Tool Latency {avg_latency:.2f}s | Est Cost: ${self.tool_stats['estimated_cost']:.2f}"
+        
+        detailed_stats = {
+            "hippocampus_hit_rate": hit_rate,
+            "semantic_cache_hit_rate": sem_hit_rate,
+            "api_calls_saved": cache_stats['wm_hits'] + sem_hits,
+            "total_api_cost": self.tool_stats["estimated_cost"],
+            "qdrant_writes": cache_stats['ltm_writes'],
+            "avg_tool_latency": avg_latency
+        }
+        
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {duration_msg}")
+        print(f"DEBUG: FINAL METRICS: {json.dumps(detailed_stats, indent=2)}")
+        
         self._publish_log("System", duration_msg)
+        self._publish_log("System", stats_msg)
+        self._publish_log("System", perf_msg)
 
         # Send explicit DONE signal to close the stream
         self.redis_client.publish(f"debate:{self.debate_id}:log_stream", "[DONE]")
@@ -283,6 +444,130 @@ class DebateCycle:
             "final_conclusion": final_conclusion,
             "jury_report": jury_report
         }
+
+    async def _check_db_date_async(self):
+        """
+        [Phase 18] Handshake with DB to find the latest available date.
+        Uses TSMC (2330.TW) as a canary to probe database freshness.
+        """
+        try:
+            from worker.tool_invoker import call_tool
+            loop = asyncio.get_running_loop()
+            
+            # Probe recent 60 days
+            today = datetime.now()
+            start_date = (today - timedelta(days=60)).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+            
+            params = {
+                "coid": "2330.TW",
+                "mdate.gte": start_date,
+                "mdate.lte": end_date,
+                # Fetch all in range to find max date manually (safer than relying on sort param support)
+            }
+            
+            self._publish_log("System", f"🔍 正在檢測資料庫最新日期 (Probe: 2330.TW)...")
+            
+            result = await loop.run_in_executor(None, call_tool, "tej.stock_price", params)
+            
+            found_date = None
+            if isinstance(result, dict):
+                 data = result.get("data") or result.get("results")
+                 if isinstance(data, list) and data:
+                     # Find max date
+                     dates = []
+                     for row in data:
+                         d = row.get("mdate")
+                         if d:
+                             dates.append(str(d).split("T")[0])
+                     
+                     if dates:
+                         found_date = max(dates)
+            
+            # [Fix] Fallback Probe if no recent data (System time might be in future)
+            if not found_date:
+                self._publish_log("System", "⚠️ 無近期數據，嘗試擴大搜索範圍 (Fallback Probe)...")
+                # Look back 2 years to find ANY data
+                start_date_fb = (today - timedelta(days=730)).strftime("%Y-%m-%d")
+                params_fb = {
+                    "coid": "2330.TW",
+                    "mdate.gte": start_date_fb,
+                    "mdate.lte": end_date,
+                    "opts.limit": 100,
+                    "sort": "mdate.desc" # Try sorting if supported to get latest
+                }
+                result_fb = await loop.run_in_executor(None, call_tool, "tej.stock_price", params_fb)
+                if isinstance(result_fb, dict):
+                     data = result_fb.get("data") or result_fb.get("results")
+                     if isinstance(data, list) and data:
+                         dates = []
+                         for row in data:
+                             d = row.get("mdate")
+                             if d:
+                                 dates.append(str(d).split("T")[0])
+                         if dates:
+                             found_date = max(dates)
+
+            if found_date:
+                self.latest_db_date = found_date
+                self._publish_log("System", f"📅 資料庫最新數據日期確認: {self.latest_db_date}")
+            else:
+                self._publish_log("System", f"⚠️ 無法確認資料庫日期 (兩次探測皆失敗)。")
+                # Fallback: Don't set a fake date, just leave as None.
+                self.latest_db_date = None
+
+        except Exception as e:
+            print(f"DB Handshake Failed: {e}")
+            self._publish_log("System", f"⚠️ 資料庫連線檢查失敗: {e}")
+
+    async def _check_and_trigger_emergency_mode(self, round_result: Dict):
+        """
+        [Phase 18] Chairman Emergency Research Mode.
+        Checks if Round 1 was full of "Insufficient Data" claims.
+        """
+        team_summaries = round_result.get("team_summaries", {})
+        combined_text = " ".join(team_summaries.values())
+        
+        # Heuristic: Detect keywords implying lack of data
+        # Note: Agents might hallucinate, so we also check if Evidence logs were empty?
+        # But we only have text summaries here easily.
+        # Let's check for specific keywords we injected or standard complaints.
+        triggers = ["資料不足", "無法獲取數據", "無數據", "Insufficient Data", "empty result"]
+        hit_count = sum(1 for t in triggers if t in combined_text)
+        
+        if hit_count >= 1: # Low threshold for safety, or check evidence_log directly
+            # Check redis evidence for emptiness/errors
+            # Implementation detail: fetch recent evidence
+            pass # Keep it simple for now based on text
+            
+            self._publish_log("Chairman", "🚨 偵測到資料嚴重不足 (Emergency Mode Triggered)。主席介入調查...")
+
+            # 1. Force enable 'searxng.search' for all agents
+            enabled_count = 0
+            for agent_name, tools in self.agent_tools_map.items():
+                if "searxng.search" not in tools:
+                    tools.append("searxng.search")
+                    self.agent_tools_map[agent_name] = tools
+                    enabled_count += 1
+            
+            if enabled_count > 0:
+                self._publish_log("System", f"🔧 已強制為 {enabled_count} 位 Agent 開啟外部搜尋工具 (searxng.search)。")
+
+            # 2. Chairman performs web search
+            from worker.tool_invoker import call_tool
+            loop = asyncio.get_running_loop()
+            
+            search_q = f"{self.topic} news analysis stock price reasons"
+            search_res = await loop.run_in_executor(None, call_tool, "searxng.search", {"q": search_q})
+            
+            context_inject = f"【主席緊急補充資訊】\n由於內部資料庫回應有限，主席提供了外部搜尋結果：\n{str(search_res)[:800]}..."
+            
+            # Inject into History so all agents see it next
+            self.history.append({"role": "Chairman (Intervention)", "content": context_inject})
+            self.full_history.append({"role": "Chairman (Intervention)", "content": context_inject})
+            
+            # Also push to Memory
+            await self.history_memory.add_turn_async("Chairman (Intervention)", context_inject, 1)
 
     def _run_jury_evaluation(self, final_conclusion: str) -> str:
         """
@@ -378,8 +663,21 @@ class DebateCycle:
 
         # 1. Fetch unverified evidence from Redis
         all_evidence = [json.loads(e) for e in self.redis_client.lrange(self.evidence_key, 0, -1)]
-        # Filter: from current round (or previous), not neutral, not verified
-        target_evidence = [e for e in all_evidence if e.get('side') != 'neutral' and not e.get('verified', False)]
+        
+        # [Governance] Check against Verified Set
+        verified_set = self.redis_client.smembers(f"debate:{self.debate_id}:verified_evidence")
+        # Redis client returns strings directly due to decode_responses=True
+        verified_set = verified_set if verified_set else set()
+        
+        target_evidence = []
+        for e in all_evidence:
+            if e.get('side') == 'neutral': continue
+            
+            # Robust Signature check
+            ev_sig = f"{e.get('timestamp')}-{e.get('tool')}"
+            if ev_sig in verified_set: continue
+            
+            target_evidence.append(e)
         
         verification_report = ""
         
@@ -387,27 +685,103 @@ class DebateCycle:
             return await self._agent_turn_async(agent, 'neutral', round_num) # Fallback to normal turn if no evidence
 
         # 2. Verify each evidence (Limit to 1-2 to save time/cost)
-        for ev in target_evidence[:2]:
+        # Sort by importance? For now, FIFO from the list we filtered.
+        for i, ev in enumerate(target_evidence[:2]):
             tool_name = ev.get('tool')
             params = ev.get('params')
             original_result = ev.get('result')
             provider_side = ev.get('side', 'Unknown')
+            provider_agent = ev.get('agent_name', 'Unknown')
             
-            self._publish_log(f"{agent.name} (Verification)", f"正在核實 {provider_side} 方使用的工具: {tool_name}...")
+            self._publish_log(f"{agent.name} (Verification)", f"正在核實 {provider_side} 方 ({provider_agent}) 使用的工具: {tool_name}...")
             
             try:
-                # Re-execute tool
+                # Re-execute tool (Upgrade: Use Verified Price for stock/index tools)
                 from worker.tool_invoker import call_tool
-                # Execute sync tool in thread pool
                 loop = asyncio.get_running_loop()
-                verify_result = await loop.run_in_executor(None, call_tool, tool_name, params)
                 
+                # [Governance] Neutral should use the Auditor Tool for price verification
+                # Check ALL price-related tools
+                price_tools = ["tej.stock_price", "yahoo.stock_price", "twse.stock_day", "financial.get_verified_price"]
+                verify_result = None
+                is_auditor_check = False
+                
+                if tool_name in price_tools:
+                    # Extract symbol/date from params
+                    # Different tools have different param names, so we normalize here
+                    v_symbol = params.get("coid") or params.get("symbol")
+                    # Try to find a date
+                    v_date = params.get("mdate.gte") or params.get("start_date") or params.get("date")
+                    
+                    if v_symbol and v_date:
+                        self._publish_log(f"{agent.name} (Verification)", f"⚡ 切換至審計工具 (financial.get_verified_price) 進行交叉驗證...")
+                        # Use Auditor Tool
+                        verify_result = await loop.run_in_executor(None, call_tool, "financial.get_verified_price", {"symbol": v_symbol, "date": str(v_date)[:10]})
+                        is_auditor_check = True
+                
+                # If not price tool or param extraction failed, fall back to exact re-execution
+                if verify_result is None:
+                    # Regular re-execution for other tools (Bypass Cache)
+                    params_bypass = params.copy()
+                    params_bypass["_bypass_cache"] = True
+                    verify_result = await loop.run_in_executor(None, call_tool, tool_name, params_bypass)
+
+                # --- Programmatic Pre-Check ---
+                # Check for "Empty vs Non-Empty" discrepancy specifically for Auditor Checks
+                programmatic_fail = False
+                fail_reason = ""
+                
+                if is_auditor_check:
+                    # Original result empty?
+                    orig_empty = False
+                    if isinstance(original_result, dict) and (not original_result.get("data") and not original_result.get("results")):
+                        orig_empty = True
+                    elif isinstance(original_result, list) and not original_result:
+                        orig_empty = True
+                        
+                    # Verify result empty?
+                    verify_empty = False
+                    if isinstance(verify_result, dict) and (not verify_result.get("data") and not verify_result.get("results")):
+                        verify_empty = True
+                    elif isinstance(verify_result, list) and not verify_result:
+                        verify_empty = True
+                        
+                    # Case: Agent claimed data but Auditor says empty (Hallucination of Data Existence?)
+                    # OR: Agent said empty but Auditor found data (Laziness?) -> Less severe
+                    # Most severe: Agent output fabricated numbers (not easy to check programmatically without parsing numbers)
+                    pass
+
                 # Construct verification prompt via PromptService
                 db = SessionLocal()
                 try:
                     comp_template = PromptService.get_prompt(db, "neutral.verification_comparison")
                     if not comp_template:
-                        comp_template = "請比較：\n原：{original_result_preview}\n新：{verify_result_preview}\nJSON: {{consistent: bool}}"
+                        comp_template = """
+請擔任「數據核實員」，比較兩份工具執行結果並判斷是否一致。
+
+【工具資訊】
+工具：{tool_name}
+參數：{params}
+來源：{provider_side} ({provider_agent})
+
+【原執行結果 (Original)】
+{original_result_preview}
+
+【核實執行結果 (Auditor Verification)】
+{verify_result_preview}
+
+【判斷標準】
+1. **數據一致性**: 數值是否大致相同？（允許微小誤差）
+2. **無中生有 (Hallucination)**: 若原結果有數據，但核實結果為「空 (Empty/No Data)」，則視為嚴重違規（編造數據）。
+3. **格式差異**: 若僅是格式不同但內容實質相同，視為一致。
+
+請輸出 JSON 格式：
+{{
+    "consistent": true/false,
+    "score_penalty": 0 到 -10 (若嚴重違規請扣分),
+    "comment": "簡短評語"
+}}
+"""
                 finally:
                     db.close()
 
@@ -415,12 +789,13 @@ class DebateCycle:
                     tool_name=tool_name,
                     params=params,
                     provider_side=provider_side,
-                    original_result_preview=str(original_result)[:1000],
-                    verify_result_preview=str(verify_result)[:1000]
+                    provider_agent=provider_agent,
+                    original_result_preview=str(original_result)[:1500],
+                    verify_result_preview=str(verify_result)[:1500]
                 )
 
                 # Call LLM for judgement
-                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。", context_tag=f"{self.debate_id}:{agent.name}:Verification")
+                judge_response = await call_llm_async(comparison_prompt, system_prompt="你是公正的數據核實員。請嚴格揪出編造數據的行為。", context_tag=f"{self.debate_id}:{agent.name}:Verification")
                 
                 # Parse JSON
                 try:
@@ -433,18 +808,28 @@ class DebateCycle:
                         penalty = judge_json.get('score_penalty', 0)
                         comment = judge_json.get('comment', '')
                         
+                        # [Governance] Apply specific penalties for Hallucination
+                        if not consistent:
+                             # Ensure negative
+                             if penalty > 0: penalty = -penalty
+                             if penalty == 0: penalty = -5 # Default penalty
+                        
                         if consistent:
                             verification_report += f"- ✅ 核實通過 ({tool_name}): 數據一致。\n"
                         else:
                             verification_report += f"- ❌ 核實失敗 ({tool_name}): {comment} (扣分: {penalty})\n"
                             if penalty < 0:
-                                self._update_team_score(provider_side, float(penalty), f"證據核實失敗: {comment}")
+                                self._update_team_score(provider_side, float(penalty), f"證據核實失敗 ({provider_agent}): {comment}")
                     else:
-                        verification_report += f"- ⚠️ 無法判斷 ({tool_name}): {judge_response[:50]}\n"
+                        verification_report += f"- ⚠️ 無法判斷 ({tool_name}): {judge_response[:50]}...\n"
 
                 except Exception as e:
                     print(f"Verification judgment parsing error: {e}")
                     verification_report += f"- ⚠️ 核實判讀錯誤 ({tool_name})\n"
+                
+                # [Optimization] Mark evidence as verified in Redis
+                ev_sig = f"{ev.get('timestamp')}-{tool_name}"
+                self.redis_client.sadd(f"debate:{self.debate_id}:verified_evidence", ev_sig)
 
             except Exception as e:
                 verification_report += f"- ⚠️ 工具重跑失敗 ({tool_name}): {e}\n"
@@ -470,6 +855,68 @@ class DebateCycle:
     def _run_round(self, round_num: int) -> Dict[str, Any]:
          """Sync wrapper around async _run_round_async"""
          return asyncio.run(self._run_round_async(round_num))
+
+    async def _run_cross_examination_async(self, round_num: int, team_summaries: Dict[str, str]):
+        """
+        執行交叉質詢環節 (Async)。
+        """
+        # 簡單策略：Pro 質詢 Con，然後 Con 質詢 Pro
+        # 如果有 Neutral，則 Neutral 可以質詢雙方
+        
+        # Identify teams
+        pro_team = next((t for t in self.teams if t.get('side') == 'pro'), None)
+        con_team = next((t for t in self.teams if t.get('side') == 'con'), None)
+        
+        if not pro_team or not con_team:
+            return
+
+        pairs = [
+            (pro_team, con_team), # Pro asks Con
+            (con_team, pro_team)  # Con asks Pro
+        ]
+        
+        for attacker, defender in pairs:
+            attacker_name = attacker['name']
+            defender_name = defender['name']
+            defender_summary = team_summaries.get(defender_name, "")
+            
+            # Select representative agent (e.g., first one)
+            attacker_agent = attacker['agents'][0]
+            defender_agent = defender['agents'][0]
+            
+            # 1. Attacker Generates Question
+            self._publish_log(attacker_name, f"正在構思對 {defender_name} 的質詢問題...")
+            
+            db = SessionLocal()
+            try:
+                q_template = PromptService.get_prompt(db, "debate.cross_exam_question")
+                if not q_template: q_template = "基於對方的論點：{opponent_summary}，請提出一個犀利的反駁問題。"
+            finally:
+                db.close()
+                
+            q_prompt = q_template.format(opponent_summary=defender_summary)
+            question = await call_llm_async(q_prompt, system_prompt=f"你是 {attacker_name} 的辯手。", context_tag=f"{self.debate_id}:CrossExam:Q:{attacker_name}")
+            
+            self._publish_log(f"{attacker_name} (Q)", f"❓ 質詢：{question}")
+            self.history.append({"role": f"{attacker_name} (Cross-Exam Q)", "content": question})
+            self.full_history.append({"role": f"{attacker_name} (Cross-Exam Q)", "content": question})
+            
+            # 2. Defender Answers
+            self._publish_log(defender_name, f"正在思考如何回答 {attacker_name} 的質詢...")
+            
+            db = SessionLocal()
+            try:
+                a_template = PromptService.get_prompt(db, "debate.cross_exam_answer")
+                if not a_template: a_template = "對方問題：{question}。請根據我方立場進行反駁與回答。"
+            finally:
+                db.close()
+                
+            a_prompt = a_template.format(question=question)
+            answer = await call_llm_async(a_prompt, system_prompt=f"你是 {defender_name} 的辯手。", context_tag=f"{self.debate_id}:CrossExam:A:{defender_name}")
+            
+            self._publish_log(f"{defender_name} (A)", f"💡 回答：{answer}")
+            self.history.append({"role": f"{defender_name} (Cross-Exam A)", "content": answer})
+            self.full_history.append({"role": f"{defender_name} (Cross-Exam A)", "content": answer})
 
     async def _run_round_async(self, round_num: int) -> Dict[str, Any]:
         """
@@ -510,23 +957,31 @@ class DebateCycle:
             for item in discussion_log:
                  self.history.append(item)
                  self.full_history.append(item)
-                 # RAG Recording
-                 rag = ReMeHistoryMemory(self.debate_id)
-                 await rag.add_turn_async(item['role'], str(item['content']), round_num)
+                 # RAG Recording (Buffered via self.history_memory)
+                 await self.history_memory.add_turn_async(item['role'], str(item['content']), round_num)
             
             self.history.append({"role": f"{team_name} Summary", "content": team_summary})
             self.full_history.append({"role": f"{team_name} Summary", "content": team_summary})
             
-            rag = ReMeHistoryMemory(self.debate_id)
-            await rag.add_turn_async(f"{team_name} Summary", team_summary, round_num)
+            await self.history_memory.add_turn_async(f"{team_name} Summary", team_summary, round_num)
             
         # [Hippocampus] Trigger Memory Consolidation
         self._publish_log("System", "🧠 正在進行海馬迴記憶鞏固 (Consolidating Working Memory)...")
         await self.hippocampus.consolidate()
+        
+        # [Optimization] Flush LTM buffers
+        self._publish_log("System", "💾 正在同步長期記憶 (Flushing LTM Buffers)...")
+        await self.history_memory.flush()
+        await self.tool_memory.flush()
+        
+        # [Phase 18] Chairman Emergency Mode Check (After Round 1)
+        if round_num == 1:
+            await self._check_and_trigger_emergency_mode(round_team_summaries)
 
-        # [Hippocampus] Trigger Memory Consolidation
-        self._publish_log("System", "🧠 正在進行海馬迴記憶鞏固 (Consolidating Working Memory)...")
-        await self.hippocampus.consolidate()
+        # 2.5 交叉質詢 (Cross-Examination)
+        if self.enable_cross_examination:
+            self._publish_log("Chairman", f"進入第 {round_num} 輪交叉質詢環節 (Cross-Examination)...")
+            await self._run_cross_examination_async(round_num, round_team_summaries)
 
         # 3. 主席彙整與下一輪方向
         handcard = self.analysis_result.get('step6_handcard') or self.analysis_result.get('step5_summary', '無手卡')
@@ -547,12 +1002,68 @@ class DebateCycle:
         self.history.append({"role": "Chairman (Next Direction)", "content": next_direction})
         self.full_history.append({"role": "Chairman (Next Direction)", "content": next_direction})
         
+        # [Debug] Save Round Log
+        self._save_round_debug_log(round_num, round_team_summaries)
+        
         return {
             "round": round_num,
             "team_summaries": round_team_summaries,
             "next_direction": next_direction
         }
         
+    async def _check_and_trigger_emergency_mode(self, summaries: Dict[str, str]):
+        """
+        Check if agents are failing to get data and trigger emergency web search.
+        """
+        # Heuristic: If summaries contain keywords like "no data", "empty", "lack of evidence"
+        failure_signals = ["no data", "empty", "lack of evidence", "查無資料", "數據不足", "無法驗證"]
+        combined_text = " ".join(summaries.values()).lower()
+        
+        score = sum(1 for s in failure_signals if s in combined_text)
+        
+        if score >= 2: # Threshold
+            self._publish_log("Chairman (Emergency)", "🚨 偵測到多方數據不足。主席啟動「緊急研究模式 (Emergency Research Mode)」！")
+            self._publish_log("System", "🔓 強制解鎖 Web Search 工具給所有 Agent...")
+            
+            # Force enable search tools for everyone
+            # This is a bit hacky, we assume agents can use 'searxng.search' if we tell them,
+            # or we need to update tool_registry?
+            # Actually, agents select tools at start. We can't easily inject new tools into their `agent_tools_map` unless we update it.
+            
+            for agent_name in self.agent_tools_map:
+                if "searxng.search" not in self.agent_tools_map[agent_name]:
+                    self.agent_tools_map[agent_name].append("searxng.search")
+                    
+            # Inject a system note into history
+            msg = "【主席指令】鑑於內部數據庫資料不足，現已開放網絡搜索權限。請善用 `searxng.search` 查找外部新聞與報告來補充論點。"
+            self.history.append({"role": "Chairman (System)", "content": msg})
+            self.full_history.append({"role": "Chairman (System)", "content": msg})
+
+    async def _check_and_trigger_emergency_mode(self, round_result: Dict):
+        """
+        Check if agents are failing to get data and trigger emergency web search.
+        """
+        # Heuristic: If summaries contain keywords like "no data", "empty", "lack of evidence"
+        team_summaries = round_result.get("team_summaries", {})
+        combined_text = " ".join(team_summaries.values()).lower()
+        
+        failure_signals = ["no data", "empty", "lack of evidence", "查無資料", "數據不足", "無法驗證"]
+        score = sum(1 for s in failure_signals if s in combined_text)
+        
+        if score >= 2: # Threshold
+            self._publish_log("Chairman (Emergency)", "🚨 偵測到多方數據不足。主席啟動「緊急研究模式 (Emergency Research Mode)」！")
+            self._publish_log("System", "🔓 強制解鎖 Web Search 工具給所有 Agent...")
+            
+            # Force enable search tools for everyone
+            for agent_name in self.agent_tools_map:
+                if "searxng.search" not in self.agent_tools_map[agent_name]:
+                    self.agent_tools_map[agent_name].append("searxng.search")
+                    
+            # Inject a system note into history
+            msg = "【主席指令】鑑於內部數據庫資料不足，現已開放網絡搜索權限。請善用 `searxng.search` 查找外部新聞與報告來補充論點。"
+            self.history.append({"role": "Chairman (System)", "content": msg})
+            self.full_history.append({"role": "Chairman (System)", "content": msg})
+
     async def _process_team_deliberation(self, team: Dict, round_num: int) -> Dict[str, Any]:
         """
         Process a single team's deliberation asynchronously.
@@ -653,7 +1164,43 @@ class DebateCycle:
                 for name, data in all_tools_dict.items():
                     available_tools_list.append({"name": name, "description": data['description']})
 
-            tools_list_text = "\n".join([f"- {t['name']}: {t['description']}" for t in available_tools_list])
+            # [Optimization Phase 7] Role-Based Tool Suggestion
+            # Sort/Tag tools based on agent side
+            sorted_tools = []
+            
+            # Define priority sets
+            # [Phase 1 Update] Hide raw 'tej.stock_price' to force use of 'financial.get_verified_price'
+            # We filter OUT tej.stock_price from the suggestion list, but keep other tej tools (like financial_summary)
+            tej_tools = [t for t in available_tools_list if "tej" in t['name'] and t['name'] != "tej.stock_price"]
+            
+            # 'financial.get_verified_price' is in official_tools
+            official_tools = [t for t in available_tools_list if "twse" in t['name'] or "verified" in t['name']]
+            backup_tools = [t for t in available_tools_list if "yahoo" in t['name'] or "search" in t['name']]
+            other_tools = [t for t in available_tools_list if t not in tej_tools and t not in official_tools and t not in backup_tools and t['name'] != "tej.stock_price"]
+            
+            if side in ["pro", "con"]:
+                # Pro/Con prioritize Verified Price (High Precision + Fallback)
+                # Highlight verified tools
+                sorted_tools.extend([{"name": t['name'], "description": f"[推薦:官方驗證/高精度] {t['description']}"} for t in official_tools])
+                sorted_tools.extend(tej_tools) # Other TEJ tools
+                sorted_tools.extend(backup_tools)
+                sorted_tools.extend(other_tools)
+            elif side == "neutral":
+                # Neutral prioritize Official/Verified (Audit)
+                sorted_tools.extend([{"name": t['name'], "description": f"[推薦:官方驗證] {t['description']}"} for t in official_tools])
+                sorted_tools.extend(tej_tools)
+                sorted_tools.extend(backup_tools)
+                sorted_tools.extend(other_tools)
+            else:
+                # Default mix
+                sorted_tools = []
+                # Ensure verified price is visible/prioritized even in default
+                sorted_tools.extend(official_tools)
+                sorted_tools.extend(tej_tools)
+                sorted_tools.extend(backup_tools)
+                sorted_tools.extend(other_tools)
+
+            tools_list_text = "\n".join([f"- {t['name']}: {t['description']}" for t in sorted_tools])
         finally:
             db.close()
         
@@ -677,17 +1224,22 @@ class DebateCycle:
             # 嘗試解析 JSON (支援 List 或 Dict 格式)
             selected_tools = []
             
-            # 1. Try List [...]
-            list_match = re.search(r'\[.*\]', response, re.DOTALL)
+            # [Fix Phase 21] Robust JSON Parsing
+            # 1. Clean Markdown code blocks ```json ... ```
+            cleaned_response = re.sub(r'```json\s*(.*?)\s*```', r'\1', response, flags=re.DOTALL)
+            cleaned_response = re.sub(r'```\s*(.*?)\s*```', r'\1', cleaned_response, flags=re.DOTALL)
+            
+            # 2. Try List [...]
+            list_match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
             if list_match:
                 try:
                     selected_tools = json.loads(list_match.group(0))
                 except:
                     pass
 
-            # 2. Try Dict {"tools": [...]} if list failed
+            # 3. Try Dict {"tools": [...]} if list failed
             if not selected_tools:
-                dict_match = re.search(r'\{.*\}', response, re.DOTALL)
+                dict_match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
                 if dict_match:
                     try:
                         data = json.loads(dict_match.group(0))
@@ -704,17 +1256,39 @@ class DebateCycle:
                 tools_display = "\n".join([f"  • {tool}" for tool in selected_tools])
                 self._publish_log(f"{agent.name} (Setup)", f"✅ 已選擇 {len(selected_tools)} 個工具：\n{tools_display}")
             else:
-                # Fallback: Auto-equip all available tools if selection fails
-                all_available = [t['name'] for t in available_tools_list]
-                self.agent_tools_map[agent.name] = all_available
-                print(f"Agent {agent.name} failed to select tools. Auto-equipping all: {all_available}")
+                # [Fix Phase 21] Improved Fallback Strategy
+                # Fallback: Instead of equipping ALL tools (which explodes context), equip a Safe Default Set
+                # Role-based fallback
+                if side == "neutral":
+                    default_tools = ["financial.get_verified_price", "twse.stock_day", "internal.search_company", "searxng.search"]
+                else:
+                    # Pro/Con: Add fallbacks (TWSE/Yahoo) to default set
+                    # [Phase 1 Update] Replace 'tej.stock_price' with 'financial.get_verified_price' in default fallback
+                    default_tools = ["financial.get_verified_price", "tej.financial_summary", "internal.search_company", "searxng.search"]
                 
-                tools_display = "\n".join([f"  • {tool}" for tool in all_available])
-                self._publish_log(f"{agent.name} (Setup)", f"⚠️ 工具選擇失敗，已自動裝備所有可用工具 ({len(all_available)}個)：\n{tools_display}")
+                # Filter defaults to ensure they are available to this agent
+                available_names = [t['name'] for t in available_tools_list]
+                # We need to ensure 'financial.get_verified_price' is in available_tools_list?
+                # It should be if it's registered globally or assigned.
+                # If not, we might need to add it explicitly to the fallback if we trust it exists.
+                safe_fallback = [t for t in default_tools if t in available_names]
+                
+                # If no safe fallback found (rare), then fall back to all
+                if not safe_fallback:
+                    safe_fallback = available_names
+                
+                self.agent_tools_map[agent.name] = safe_fallback
+                
+                print(f"Agent {agent.name} failed to select tools. Raw response: {response[:100]}... Using fallback: {safe_fallback}")
+                
+                tools_display = "\n".join([f"  • {tool}" for tool in safe_fallback])
+                self._publish_log(f"{agent.name} (Setup)", f"⚠️ 工具選擇解析失敗 (Raw: {response[:50]}...)，已啟用安全預設工具組 ({len(safe_fallback)}個)：\n{tools_display}")
+
         except Exception as e:
             print(f"Error in tool selection for {agent.name}: {e}")
-            self.agent_tools_map[agent.name] = []
-            self._publish_log(f"{agent.name} (Setup)", f"❌ 工具選擇錯誤: {str(e)}")
+            # Final Fallback
+            self.agent_tools_map[agent.name] = ["searxng.search"]
+            self._publish_log(f"{agent.name} (Setup)", f"❌ 工具選擇發生錯誤: {str(e)}。已啟用基礎搜尋工具。")
 
     def _summarize_old_turns(self):
         """
@@ -795,6 +1369,7 @@ class DebateCycle:
         
         # 構建 Prompt - 使用 Agent 自己選擇的工具
         selected_tool_names = self.agent_tools_map.get(agent.name, [])
+        ollama_tools = []
         
         # 如果有選擇，則只顯示選擇的工具；否則顯示所有「可用」的工具
         if selected_tool_names:
@@ -805,6 +1380,33 @@ class DebateCycle:
                     # Assuming version 'v1' for now as selection doesn't specify version
                     tool_data = tool_registry.get_tool_data(name)
                     filtered_tools[name] = tool_data
+                    
+                    # Convert to Ollama tool format
+                    # Ensure parameters schema is valid and robust
+                    params_schema = tool_data.get('schema')
+                    if not params_schema:
+                        params_schema = {"type": "object", "properties": {}, "required": []}
+                    elif isinstance(params_schema, dict):
+                        # Ensure 'type' is object
+                        if "type" not in params_schema:
+                            params_schema["type"] = "object"
+                        # Ensure 'properties' exists
+                        if "properties" not in params_schema:
+                            params_schema["properties"] = {}
+                    
+                    # Fix: description might be a dict (metadata) or a string
+                    desc = tool_data.get('description', '')
+                    if isinstance(desc, dict):
+                        desc = desc.get('description', '')
+
+                    ollama_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "description": desc,
+                            "parameters": params_schema
+                        }
+                    })
                 except Exception as e:
                     print(f"Warning: Selected tool '{name}' not found or failed to load: {e}")
 
@@ -812,7 +1414,7 @@ class DebateCycle:
                  # 如果選擇無效，回退到顯示該 Agent 所有可用的工具 (ToolSet)
                  tools_desc = get_tools_description()
             else:
-                 tools_desc = "你已選擇並激活以下工具：\n" + "\n".join([f"### {name}\n{data['description']}\nSchema: {json.dumps(data['schema'], ensure_ascii=False)}" for name, data in filtered_tools.items()])
+                 tools_desc = "你已選擇並激活以下工具（系統已自動掛載）：\n" + "\n".join([f"- {name}: {data['description']}" for name, data in filtered_tools.items()])
         else:
             # 如果沒有選擇（例如初始化失敗），顯示所有工具
             tools_desc = get_tools_description()
@@ -833,17 +1435,17 @@ class DebateCycle:
         
         # Retrieve Tool LTM hints
         tool_hints = ""
-        tool_mem = ReMeToolLongTermMemory()
-        tool_hints = await tool_mem.retrieve_async(self.topic) # Use topic as context for now
+        # Use persistent instance
+        tool_hints = await self.tool_memory.retrieve_async(self.topic) # Use topic as context for now
         if tool_hints:
             tools_examples += f"\n\n**過往成功工具調用參考 (ReMe Tool LTM)**:\n{tool_hints}"
 
         # Retrieve RAG Context (Relevant History)
         rag_context = ""
-        rag = ReMeHistoryMemory(self.debate_id)
+        # Use persistent instance
         # Use current agent role and topic as query
         query = f"{agent.name} {side} {self.topic}"
-        relevant_turns = await rag.retrieve_async(query, top_k=2)
+        relevant_turns = await self.history_memory.retrieve_async(query, top_k=2)
         if relevant_turns:
             rag_context = "\n".join([f"> [{t['role']} (Round {t['round']})]: {str(t['content'])[:200]}..." for t in relevant_turns])
 
@@ -858,7 +1460,14 @@ class DebateCycle:
             
             # A. Operational Rules (Externalized)
             operational_rules = PromptService.get_prompt(db, "debater.operational_rules")
-            if not operational_rules: operational_rules = "System Rules: Use tools first."
+            if not operational_rules:
+                operational_rules = f"""System Rules: Use tools first.
+【資料查詢重要須知 (TEJ)】
+1. **資料庫時間限制**: 本系統資料庫最新數據僅更新至 **{self.latest_db_date}**。請勿查詢此日期之後的數據（例如不要查今天或未來），否則只會得到空值。
+2. **日期錯誤處理**: 若收到「日期範圍過大」錯誤，**絕對不要懷疑公司代碼**。請直接**縮短日期範圍**（建議 90 天以內）。
+3. **禁止瞎掰 (Data Honesty)**: 若工具回傳空資料 (`[]`)，**嚴禁**編造股價趨勢或下跌原因。你必須誠實回報「數據不足」並請求暫停或更換分析角度。
+4. **禁止重複**: 若已知公司 ID，請勿重複搜尋名稱。
+"""
             
             # B. Agent Persona (Custom or Default)
             custom_prompt = getattr(agent, 'system_prompt', '').strip()
@@ -877,8 +1486,15 @@ class DebateCycle:
 辯題：{self.topic}
 """
 
+            # [Phase 18] Dynamic Data Honesty Rules
+            honesty_rule = ""
+            if self.latest_db_date:
+                honesty_rule = f"\nSystem Note: The database data ends on {self.latest_db_date}. Do not query future dates."
+            
+            honesty_rule += "\nSystem Rule: Do NOT fabricate data. If data is missing, state 'Insufficient Data' or use search tools."
+
             # Combine
-            default_system = f"{persona_section}\n{operational_rules}"
+            default_system = f"{persona_section}\n{operational_rules}\n{honesty_rule}"
             
             # Try to get override from DB, but prioritize constructing it dynamically if not found
             system_prompt = default_system
@@ -887,14 +1503,30 @@ class DebateCycle:
             user_template = PromptService.get_prompt(db, "debater.tool_instruction")
             if not user_template: user_template = "Instructions: {history_text} {tools_desc}"
             
+            # [Phase 18] Dynamic Date Injection
+            db_date_info = ""
+            if self.latest_db_date:
+                db_date_info = f"\n**注意：資料庫最新數據日期為 {self.latest_db_date}。**"
+            
+            # [Fix] Stronger instruction for Fallback
+            fallback_hint = """
+
+💡 **重要提示 (Fallback Strategy)**：
+1. **數據獲取優先級**: `tej.stock_price` (首選) -> `twse.stock_day` (官方備用) -> `yahoo.stock_price` (最後手段)。
+2. **遇到空數據時**: 若 `tej` 回傳空列表 `[]`，這通常是因為**日期範圍不匹配**或**資料庫未更新**。請立即嘗試使用 `twse.stock_day` 或 `yahoo.stock_price` 查詢相同標的。
+3. **搜尋關鍵字優化**: 若需使用 `searxng` 查找財報或新聞，**請勿僅搜尋代碼**。
+   - ❌ 避免: `"2330"`
+   - ✅ 推薦: `"2330.TW 2024 Q4 營收 YoY"` 或 `"台積電 法說會 重點"`
+"""
+            
             user_prompt = user_template.format(
                 round_num=round_num,
                 history_text=history_text,
                 chairman_summary=self.analysis_result.get('step5_summary', '無'),
-                current_date=CURRENT_DATE,
+                current_date=f"{CURRENT_DATE} {db_date_info}",
                 stock_codes=chr(10).join([f"- {name}: {code}" for name, code in STOCK_CODES.items()]),
                 tools_desc=tools_desc,
-                tools_examples=tools_examples
+                tools_examples=tools_examples + fallback_hint
             )
         finally:
             db.close()
@@ -909,14 +1541,34 @@ class DebateCycle:
         current_step = 0
         current_prompt = user_prompt
         collected_evidence = [] # Track evidence for fallback report
+        tool_call_history = [] # Track last N tool calls to prevent loops (A-B-A patterns)
         
         while True: # Outer Loop for Extension Retry
             while current_step < max_steps:
                 current_step += 1
                 
-                # Async LLM Call
-                response = await call_llm_async(current_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
+                # Async LLM Call (Passing tools!)
+                response = await call_llm_async(
+                    current_prompt,
+                    system_prompt=system_prompt,
+                    context_tag=f"{self.debate_id}:{agent.name}",
+                    tools=ollama_tools if ollama_tools else None
+                )
                 print(f"DEBUG: Agent {agent.name} response (Step {current_step}): {response[:500]}")
+                
+                # [Debug] Trace LLM IO
+                trace_item = {
+                    "timestamp": datetime.now().isoformat(),
+                    "agent": agent.name,
+                    "step": current_step,
+                    "event": "LLM_RESPONSE",
+                    "prompt": current_prompt,
+                    "response": response
+                }
+                self.debug_trace.append(trace_item)
+                
+                # [Realtime] Log trace details
+                self._log_to_file(f"--- [LLM IO] {agent.name} Step {current_step} ---\nPrompt Preview: {current_prompt[:200]}...\nResponse Preview: {response[:200]}...")
 
                 # --- [Optimization Phase 3] Pre-Flight Check (Output Validation) ---
                 # 簡單的輸出檢查，攔截明顯錯誤
@@ -974,6 +1626,29 @@ class DebateCycle:
                         tool_name = str(tool_call["tool"]).strip()
                         params = tool_call["params"]
                         
+                        # --- Check for Duplicate Call (Loop Prevention & Sentinel) ---
+                        current_call_signature = f"{tool_name}:{json.dumps(params, sort_keys=True)}"
+                        
+                        # [Robustness] Enhanced Loop Detection (History Check)
+                        # Check against ALL previous calls in this turn to prevent ANY exact repeats
+                        if current_call_signature in tool_call_history:
+                            print(f"⚠️ Loop detected: Agent {agent.name} repeated call {tool_name}")
+                            self._publish_log(f"{agent.name} (System)", f"⚠️ 偵測到重複調用 ({tool_name})，已攔截。")
+                            current_prompt = f"系統提示：你在本回合已經執行過這個工具（參數相同）。請不要重複調用。請嘗試修改參數（如日期範圍）、更換工具，或直接根據現有資訊進行分析。"
+                            
+                            # [Observability] Log Metric
+                            print(f"[LOOP_DETECTED] agent={agent.name} tool={tool_name} type=history_repeat")
+                            continue
+                        
+                        tool_call_history.append(current_call_signature)
+                        
+                        # Soft loop check (frequency)
+                        sentinel_key = f"{agent.name}:{current_call_signature}"
+                        self._loop_sentinel[sentinel_key] = self._loop_sentinel.get(sentinel_key, 0) + 1
+                        if self._loop_sentinel[sentinel_key] > 2:
+                             print(f"[LOOP_DETECTED] agent={agent.name} tool={tool_name} type=frequent_access count={self._loop_sentinel[sentinel_key]}")
+                        # --------------------------------------------------
+
                         # --- Meta-Tool: reset_equipped_tools ---
                         if tool_name == "reset_equipped_tools":
                             target_group = params.get("group", "basic")
@@ -1056,7 +1731,21 @@ class DebateCycle:
                                 # 2. Execute Tool (Sensory Input)
                                 from worker.tool_invoker import call_tool
                                 loop = asyncio.get_running_loop()
+                                
+                                # [Observability] Track Latency & Cost
+                                start_tool = datetime.now()
                                 tool_result = await loop.run_in_executor(None, call_tool, tool_name, params)
+                                tool_duration = (datetime.now() - start_tool).total_seconds()
+                                
+                                self.tool_stats["count"] += 1
+                                self.tool_stats["total_time"] += tool_duration
+                                
+                                # Simple Cost Model
+                                cost = 0.0
+                                if tool_name.startswith("tej."): cost = 0.03 # $0.03 per TEJ call
+                                elif tool_name.startswith("searxng."): cost = 0.00 # Free
+                                elif tool_name.startswith("financial."): cost = 0.01 # Auditor
+                                self.tool_stats["estimated_cost"] += cost
                                 
                                 # 3. Store in Working Memory
                                 await self.hippocampus.store(agent.name, tool_name, params, tool_result)
@@ -1070,11 +1759,25 @@ class DebateCycle:
                             
                             # Print full result to backend console for debugging (as requested)
                             print(f"DEBUG: Full tool result for {tool_name}:\n{json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)}")
+                            
+                            # [Debug] Trace Tool Result
+                            self.debug_trace.append({
+                                "timestamp": datetime.now().isoformat(),
+                                "agent": agent.name,
+                                "step": current_step,
+                                "event": "TOOL_RESULT",
+                                "tool": tool_name,
+                                "params": params,
+                                "result": tool_result
+                            })
+                            
+                            # [Realtime] Log trace details
+                            self._log_to_file(f"--- [TOOL RESULT] {agent.name} ---\nTool: {tool_name}\nParams: {params}\nResult Preview: {str(tool_result)[:200]}...")
 
                             # Record successful tool usage to Tool LTM
                             try:
-                                tool_mem = ReMeToolLongTermMemory()
-                                await tool_mem.record_async(
+                                # Use persistent instance
+                                await self.tool_memory.record_async(
                                     intent=f"Debate on {self.topic}",
                                     tool_name=tool_name,
                                     params=params,
@@ -1098,6 +1801,18 @@ class DebateCycle:
                             }
                             self.redis_client.rpush(self.evidence_key, json.dumps(evidence_entry, ensure_ascii=False))
                             
+                            # [Optimization Phase 18] Data Honesty Check
+                            # Check if result is effectively empty
+                            is_empty_result = False
+                            if isinstance(tool_result, dict):
+                                # TEJ standard: {'data': [], ...} or {'results': []}
+                                if not tool_result.get("data") and not tool_result.get("results") and not tool_result.get("content"):
+                                     # Check specific keys that might contain data
+                                     if "data" in tool_result or "results" in tool_result:
+                                         is_empty_result = True
+                            elif isinstance(tool_result, list) and len(tool_result) == 0:
+                                is_empty_result = True
+                            
                             # Add to local collection (Truncated for summary)
                             # Avoid huge context overhead
                             result_str = str(tool_result)
@@ -1107,61 +1822,115 @@ class DebateCycle:
                                 preview = result_str
                                 
                             collected_evidence.append(f"【證據 {current_step}】{tool_name}\n結果摘要: {preview}")
+                            
+                            # Prepare prompt for next step
+                            next_prompt_suffix = ""
+                            if is_empty_result:
+                                next_prompt_suffix = "\n\n⚠️ **系統警告 (Data Honesty)**：此工具調用返回了 **空數據 (Empty)**。\n這意味著 TEJ 數據庫中可能沒有這段期間的資料。\n\n**請立即執行 Fallback 策略**：\n1. 若你是查詢股價，請改用 `twse.stock_day` (參數: symbol, date) 或 `yahoo.stock_price`。\n2. 若你是查詢財務數據，請嘗試調整日期範圍或改用 `searxng.search` 查找新聞報導。\n3. **絕對禁止**編造數據。"
 
                         except Exception as e:
+                            # [Error Taxonomy & Failure Mode Handling]
                             error_msg = str(e)
+                            is_fatal = False
+                            advice = ""
                             
-                            # --- Tool Name Correction Logic ---
-                            if "not found" in error_msg or "Tool" in error_msg:
+                            # Check for Structured ToolError
+                            if isinstance(e, ToolError):
+                                error_type = e.error_type
+                                meta = e.metadata
+                                
+                                # Failure Mode Memory Check
+                                # Hash params to detect "same error + same params"
+                                param_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()
+                                fm_key = f"{agent.name}:{tool_name}:{error_type.value}"
+                                
+                                if fm_key not in self._failure_memory:
+                                    self._failure_memory[fm_key] = {"count": 0, "hashes": set()}
+                                
+                                self._failure_memory[fm_key]["count"] += 1
+                                self._failure_memory[fm_key]["hashes"].add(param_hash)
+                                
+                                # Circuit Breaker logic
+                                if self._failure_memory[fm_key]["count"] > 3:
+                                    advice += "\n\n⚠️ 系統警告：你已連續多次遭遇此類型錯誤。請停止嘗試此路徑，改用其他分析方法。"
+                                
+                                if error_type == TejErrorType.RECOVERABLE:
+                                    advice = f"\n💡 建議調整參數：{meta.get('hint', '請檢查參數格式')}。"
+                                    if "retry_after" in meta:
+                                        time.sleep(meta["retry_after"]) # Basic backoff
+                                        
+                                elif error_type == TejErrorType.TERMINAL:
+                                    advice = "\n⛔ 此錯誤為終端錯誤（資料不存在或路徑無效）。請勿再重試此工具/參數組合。"
+                                    # We could force stop tool usage here, but prompt guidance is softer first step.
+                                    
+                                elif error_type == TejErrorType.FATAL:
+                                    advice = "\n🔥 嚴重錯誤。請立即停止工具調用，並向主席回報。"
+                                    is_fatal = True
+
+                            # --- Tool Name Correction Logic (Legacy Fallback) ---
+                            elif "not found" in error_msg or "Tool" in error_msg:
                                 all_tools = list(tool_registry.list().keys())
                                 matches = []
-                                
-                                # 1. Fuzzy Match (Original)
                                 fuzzy = difflib.get_close_matches(tool_name, all_tools, n=3, cutoff=0.4)
                                 matches.extend(fuzzy)
-                                
-                                # 2. Case-Insensitive Substring Match (New)
                                 tool_name_lower = tool_name.lower()
                                 for t in all_tools:
                                     if tool_name_lower in t.lower() or t.lower() in tool_name_lower:
-                                        if t not in matches:
-                                            matches.append(t)
-                                            
-                                # 3. Limit suggestions
+                                        if t not in matches: matches.append(t)
                                 matches = matches[:5]
-                                
-                                if matches:
-                                    suggestion = f" Did you mean: {', '.join(matches)}?"
-                                    error_msg += suggestion
-                                else:
-                                    # If absolutely no match, list all tools in current group if possible, or top 5 generic
-                                    error_msg += f" Available tools: {', '.join(all_tools[:5])}..."
+                                if matches: error_msg += f" Did you mean: {', '.join(matches)}?"
+                                else: error_msg += f" Available tools: {', '.join(all_tools[:5])}..."
                             # ----------------------------------
                             
-                            tool_result = {"error": f"Tool execution error: {error_msg}"}
-                            print(f"ERROR: Tool {tool_name} failed: {error_msg}")
+                            final_msg = f"Tool execution error: {error_msg}{advice}"
+                            tool_result = {"error": final_msg}
+                            print(f"ERROR: Tool {tool_name} failed: {final_msg}")
+                            
+                            # [Debug] Trace Tool Failure
+                            self.debug_trace.append({
+                                "timestamp": datetime.now().isoformat(),
+                                "agent": agent.name,
+                                "step": current_step,
+                                "event": "TOOL_FAILURE",
+                                "tool": tool_name,
+                                "params": params,
+                                "result": tool_result
+                            })
 
                             # Record failed tool usage
                             try:
-                                tool_mem = ReMeToolLongTermMemory()
-                                await tool_mem.record_async(
+                                await self.tool_memory.record_async(
                                     intent=f"Debate on {self.topic}",
                                     tool_name=tool_name,
                                     params=params,
-                                    result=str(e),
+                                    result=final_msg,
                                     success=False
                                 )
                             except Exception as ex:
                                 print(f"Warning: Failed to record tool failure to LTM: {ex}")
 
-                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {error_msg}")
+                            collected_evidence.append(f"【證據 {current_step}】{tool_name}\n執行失敗: {final_msg}")
+                            
+                            if is_fatal:
+                                # Break inner loop to force conclusion or chairman call
+                                current_prompt = f"系統發生嚴重錯誤 ({error_msg})，請立即終止調查並回報。"
+                                # Force next step to be text response (conclusion)
+                                # But we continue loop to let agent explain.
                         
                         # Update prompt with tool result for NEXT step
+                        # Use variable next_prompt_suffix if defined (from Data Honesty Check)
+                        if 'next_prompt_suffix' not in locals():
+                            next_prompt_suffix = ""
+
                         current_prompt = f"""工具 {tool_name} 的執行結果：
 {json.dumps(tool_result, ensure_ascii=False, indent=2)}
 
-請根據這些證據進行發言。如果你覺得證據不足，可以再次調用其他工具（請繼續輸出 JSON）。
-如果證據足夠，請輸出最終論點（純文字）。"""
+【系統提示】
+1. 請檢查上述結果中的 system_hint (若有)。
+2. 若獲得了公司 ID/Ticker，請務必繼續調用財務或股價工具 (如 tej.stock_price, tej.financial_summary) 以獲取深度數據。
+3. 不要只停留在搜尋結果，請挖掘數據背後的趨勢。
+4. 如果證據已足夠支持你的論點，請輸出最終發言（純文字）。{next_prompt_suffix}
+"""
                         
                         # Loop continues to next step...
                         continue

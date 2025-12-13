@@ -12,7 +12,8 @@ import requests
 
 from .tool_adapter import ToolAdapter
 from .base import ToolResult, UpstreamError
-
+from mars.types.errors import ToolRecoverableError, ToolTerminalError, ToolFatalError
+from worker.utils.symbol_utils import normalize_symbol
 
 class TEJBaseAdapter(ToolAdapter):
     """Base adapter for TEJ API interactions."""
@@ -67,6 +68,21 @@ class TEJBaseAdapter(ToolAdapter):
                     if filters and "coid" in filters and filters["coid"] is None:
                         filters["coid"] = params[alias] # Update filter if it was passed as None key
                     break
+        
+        # [Fix Phase 20] Use robust normalization
+        if "coid" in params and isinstance(params["coid"], str):
+            try:
+                norm = normalize_symbol(params["coid"])
+                params["coid"] = norm["coid"]
+            except Exception as e:
+                print(f"Symbol normalization warning: {e}")
+                # Fallback to simple strip
+                if params["coid"].endswith(".TW"):
+                    params["coid"] = params["coid"].replace(".TW", "")
+
+            # Also update filters if they use coid
+            if filters and "coid" in filters and isinstance(filters["coid"], str):
+                 filters["coid"] = params["coid"]
 
         url = self._build_url(db, table)
         query: Dict[str, Any] = {}
@@ -122,6 +138,18 @@ class TEJBaseAdapter(ToolAdapter):
         print(f"DEBUG: TEJ API returned {len(rows)} rows.")
         if len(rows) == 0:
              print(f"WARNING: TEJ API returned 0 rows for {url}. Check date range and filters.")
+             # [Fix] Raise error if empty to trigger Agent retry/fallback
+             # Only if not a search query (company_info might return empty if not found)
+             if "TAPRCD" in table or "TASALE" in table or "TAIM1A" in table:
+                 # [Phase 2 Update] Stronger Fallback Guidance
+                 fallback_msg = ""
+                 if "TAPRCD" in table: # Stock Price
+                     fallback_msg = "\n⚠️ **嚴重警告**：TEJ 股價數據為空。請立即改用 `financial.get_verified_price` (推薦) 或 `yahoo.stock_price` 獲取數據。"
+                 
+                 raise ToolRecoverableError(
+                     message=f"❌ TEJ 查詢成功但無資料 ({db}/{table})。可能是日期範圍內無交易，或資料庫未更新。{fallback_msg}\n建議行動：\n1. 改用備用工具 (如 financial.get_verified_price)\n2. 檢查日期範圍 (不要查詢未來日期)",
+                     metadata={"hint": "use_fallback_tools", "tool": "tej", "table": table}
+                 )
 
         data = {
             "db": db,
@@ -130,6 +158,31 @@ class TEJBaseAdapter(ToolAdapter):
             "offset": query.get("opts.offset", 0),
             "rows": rows,
         }
+
+        # [Fix Phase 2] Normalize result and check warnings (e.g. date_span_too_large)
+        warnings = []
+        # Extract warnings from meta or response if TEJ provides them there
+        if raw.get("meta") and "warnings" in raw["meta"]:
+             warnings.extend(raw["meta"]["warnings"])
+        
+        # Check specific error patterns in the 'rows' themselves or raw response
+        if "warnings" in raw:
+             if isinstance(raw["warnings"], list):
+                 warnings.extend(raw["warnings"])
+             else:
+                 warnings.append(str(raw["warnings"]))
+        
+        # Construct tool_data dummy for _normalize_tej_result
+        tool_data_dummy = {"group": "tej"}
+        
+        # This call will raise ToolRecoverableError if critical warnings found
+        normalized_data = self._normalize_tej_result(tool_data_dummy, {"data": rows, "meta": raw.get("meta")}, warnings)
+        
+        # Re-package normalized data back into our 'data' structure
+        # _normalize_tej_result returns { "data": [...], "meta": ..., "warnings": ... }
+        if "data" in normalized_data:
+            data["rows"] = normalized_data["data"]
+
         citations = [{
             "title": f"TEJ {db}/{table}",
             "url": url,
@@ -139,26 +192,23 @@ class TEJBaseAdapter(ToolAdapter):
         return ToolResult(data=data, raw=raw, used_cache=False, cost=None, citations=citations)
 
     def map_error(self, http_status: int, body: Any) -> Exception:
-        code = "ERR-UNKNOWN"
         message = str(body)
-        
-        if http_status == 401:
-            code = "ERR-AUTH"
-            message = "Invalid API Key"
-        elif http_status == 403:
-            code = "ERR-FORBIDDEN"
-            message = "Access Denied"
-        elif http_status == 404:
-            code = "ERR-NOT-FOUND"
-            message = "Resource Not Found"
-        elif http_status == 429:
-            code = "ERR-RATE-LIMIT"
-            message = "Rate Limit Exceeded"
-        
         if isinstance(body, dict) and "error" in body:
              message = body["error"]
-             
-        return UpstreamError(code=code, http_status=http_status, message=message)
+
+        if http_status == 401:
+            return ToolFatalError(f"TEJ Auth Error (401): {message}", metadata={"http_status": 401})
+        elif http_status == 403:
+            return ToolFatalError(f"TEJ Access Denied (403): {message}", metadata={"http_status": 403})
+        elif http_status == 404:
+            # 404 might be wrong endpoint or truly not found. For TEJ datatables, it usually means table not found?
+            # Or resource not found. Let's treat as Terminal for this path.
+            return ToolTerminalError(f"Resource Not Found (404): {message}", metadata={"http_status": 404})
+        elif http_status == 429:
+            return ToolRecoverableError(f"Rate Limit Exceeded (429): {message}. Please retry later.", metadata={"retry_after": 5})
+        
+        # Default fallback
+        return UpstreamError(code="ERR-UNKNOWN", http_status=http_status, message=message)
 
     def _normalize_tej_result(self, tool_data: Dict[str, Any], result: Dict[str, Any], warnings: list) -> Dict[str, Any]:
         """將 TEJ 結果標準化為 { data: [...] }，並附加 warnings。"""
@@ -181,13 +231,23 @@ class TEJBaseAdapter(ToolAdapter):
             data = dt.get("data") if isinstance(dt and dt.get("data"), list) else None
             meta = (dt.get("meta") if isinstance(dt, dict) else None)
         
+        # [CRITICAL FIX] TEJ Error Guard
+        # Check warnings FIRST before returning any data (even empty list)
+        if warnings:
+            for w in warnings:
+                if "date_span_too_large" in str(w):
+                    raise ToolRecoverableError(
+                        message="查詢失敗：TEJ 拒絕處理此請求，原因為「日期範圍過大 (date_span_too_large)」。請務必將日期範圍縮小至 90 天以內（例如：2024-01-01 到 2024-03-31），並使用多次查詢來獲取長週期數據。",
+                        metadata={"hint": "shrink_date_range", "max_days": 90}
+                    )
+
         if isinstance(data, list):
             # [Smart Truncation]
             MAX_ROWS_TO_RETURN = 10
             if len(data) > MAX_ROWS_TO_RETURN:
                 original_count = len(data)
                 # Take last 10 (assuming ascending order which is typical for time series)
-                data = data[-MAX_ROWS_TO_RETURN:] 
+                data = data[-MAX_ROWS_TO_RETURN:]
                 warnings.append(f"truncated: showing last {MAX_ROWS_TO_RETURN} of {original_count} rows. Use date filter to narrow down.")
             
             out = {"data": data}
@@ -196,6 +256,7 @@ class TEJBaseAdapter(ToolAdapter):
             if warnings:
                 out["warnings"] = warnings
             return out
+            
         # 無法標準化，回傳原始並帶警示
         if warnings:
             result["warnings"] = warnings
@@ -223,10 +284,9 @@ class TEJCompanyInfo(TEJBaseAdapter):
         kwargs = self._flatten_params(kwargs)
 
         coid = kwargs.get("coid")
-        # Validation removed here, handled by _execute_query alias logic or TEJ API error
-        # if not coid:
-        #     raise ValueError("coid is required")
-        return self._execute_query("TRAIL", "AIND", params=kwargs, filters={"coid": coid})
+        # [Config] Use TRAIL (Trial) by default, allow override to TWN via env var
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "AIND", params=kwargs, filters={"coid": coid})
 
 class TEJStockPrice(TEJBaseAdapter):
     name = "tej.stock_price"
@@ -250,7 +310,8 @@ class TEJStockPrice(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAPRCD", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAPRCD", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJMonthlyRevenue(TEJBaseAdapter):
     name = "tej.monthly_revenue"
@@ -273,7 +334,8 @@ class TEJMonthlyRevenue(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TASALE", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TASALE", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJInstitutionalHoldings(TEJBaseAdapter):
     name = "tej.institutional_holdings"
@@ -298,7 +360,8 @@ class TEJInstitutionalHoldings(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TATINST1", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TATINST1", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJMarginTrading(TEJBaseAdapter):
     name = "tej.margin_trading"
@@ -322,7 +385,8 @@ class TEJMarginTrading(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAGIN", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAGIN", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJForeignHoldings(TEJBaseAdapter):
     name = "tej.foreign_holdings"
@@ -345,7 +409,8 @@ class TEJForeignHoldings(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAQFII", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAQFII", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialSummary(TEJBaseAdapter):
     name = "tej.financial_summary"
@@ -370,7 +435,11 @@ class TEJFinancialSummary(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAIM1A", params=kwargs, filters={"coid": kwargs.get("coid")})
+        # [Optimization] Default to include self-assessed data for latest info
+        if "include_self_acc" not in kwargs:
+            kwargs["include_self_acc"] = "Y"
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAIM1A", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFundNAV(TEJBaseAdapter):
     name = "tej.fund_nav"
@@ -393,7 +462,8 @@ class TEJFundNAV(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TANAV", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TANAV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJShareholderMeeting(TEJBaseAdapter):
     name = "tej.shareholder_meeting"
@@ -417,7 +487,8 @@ class TEJShareholderMeeting(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAMT", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAMT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFundBasicInfo(TEJBaseAdapter):
     name = "tej.fund_basic_info"
@@ -438,7 +509,8 @@ class TEJFundBasicInfo(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAATT", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAATT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundInfo(TEJBaseAdapter):
     name = "tej.offshore_fund_info"
@@ -457,7 +529,8 @@ class TEJOffshoreFundInfo(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFATT", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFATT", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundDividend(TEJBaseAdapter):
     name = "tej.offshore_fund_dividend"
@@ -478,7 +551,8 @@ class TEJOffshoreFundDividend(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFCAN", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFCAN", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
     name = "tej.offshore_fund_holdings_region"
@@ -499,7 +573,8 @@ class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFIVA", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFIVA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
     name = "tej.offshore_fund_holdings_industry"
@@ -520,7 +595,8 @@ class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFIVP", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFIVP", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundNAVRank(TEJBaseAdapter):
     name = "tej.offshore_fund_nav_rank"
@@ -541,7 +617,8 @@ class TEJOffshoreFundNAVRank(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFMNV", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFMNV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
     name = "tej.offshore_fund_nav_daily"
@@ -562,7 +639,8 @@ class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFNAV", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFNAV", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundSuspension(TEJBaseAdapter):
     name = "tej.offshore_fund_suspension"
@@ -583,7 +661,8 @@ class TEJOffshoreFundSuspension(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFSUSP", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFSUSP", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOffshoreFundPerformance(TEJBaseAdapter):
     name = "tej.offshore_fund_performance"
@@ -604,7 +683,8 @@ class TEJOffshoreFundPerformance(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOFUNDS", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOFUNDS", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJIFRSAccountDescriptions(TEJBaseAdapter):
     name = "tej.ifrs_account_descriptions"
@@ -626,7 +706,8 @@ class TEJIFRSAccountDescriptions(TEJBaseAdapter):
         filters = {}
         if kwargs.get("code"):
             filters["code"] = kwargs.get("code")
-        return self._execute_query("TRAIL", "TAIACC", params=kwargs, filters=filters)
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAIACC", params=kwargs, filters=filters)
 
 class TEJFinancialCoverCumulative(TEJBaseAdapter):
     name = "tej.financial_cover_cumulative"
@@ -647,7 +728,8 @@ class TEJFinancialCoverCumulative(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAIM1AA", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAIM1AA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
     name = "tej.financial_summary_quarterly"
@@ -671,7 +753,11 @@ class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAIM1AQ", params=kwargs, filters={"coid": kwargs.get("coid")})
+        # [Optimization] Default to include self-assessed data for latest info
+        if "include_self_acc" not in kwargs:
+            kwargs["include_self_acc"] = "Y"
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAIM1AQ", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFinancialCoverQuarterly(TEJBaseAdapter):
     name = "tej.financial_cover_quarterly"
@@ -692,7 +778,8 @@ class TEJFinancialCoverQuarterly(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAIM1AQA", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAIM1AQA", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJFuturesData(TEJBaseAdapter):
     name = "tej.futures_data"
@@ -716,7 +803,8 @@ class TEJFuturesData(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAFUTR", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAFUTR", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOptionsBasicInfo(TEJBaseAdapter):
     name = "tej.options_basic_info"
@@ -735,7 +823,8 @@ class TEJOptionsBasicInfo(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOPBAS", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOPBAS", params=kwargs, filters={"coid": kwargs.get("coid")})
 
 class TEJOptionsDailyTrading(TEJBaseAdapter):
     name = "tej.options_daily_trading"
@@ -756,4 +845,5 @@ class TEJOptionsDailyTrading(TEJBaseAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         kwargs = self._flatten_params(kwargs)
-        return self._execute_query("TRAIL", "TAOPTION", params=kwargs, filters={"coid": kwargs.get("coid")})
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAOPTION", params=kwargs, filters={"coid": kwargs.get("coid")})

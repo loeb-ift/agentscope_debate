@@ -6,6 +6,22 @@ import hashlib
 import time
 from api.redis_client import get_redis_client
 from jsonschema import validate, ValidationError
+from mars.types.errors import ToolRecoverableError
+from adapters.verified_price_adapter import VerifiedPriceAdapter
+from adapters.twse_adapter import TWSEStockDay
+from adapters.yahoo_adapter import YahooPriceAdapter
+from adapters.tej_adapter import (
+    TEJCompanyInfo, TEJStockPrice, TEJMonthlyRevenue,
+    TEJInstitutionalHoldings, TEJMarginTrading, TEJForeignHoldings,
+    TEJFinancialSummary, TEJFundNAV, TEJShareholderMeeting,
+    TEJFundBasicInfo, TEJOffshoreFundInfo, TEJOffshoreFundDividend,
+    TEJOffshoreFundHoldingsRegion, TEJOffshoreFundHoldingsIndustry,
+    TEJOffshoreFundNAVRank, TEJOffshoreFundNAVDaily, TEJOffshoreFundSuspension,
+    TEJOffshoreFundPerformance, TEJIFRSAccountDescriptions,
+    TEJFinancialCoverCumulative, TEJFinancialSummaryQuarterly,
+    TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo,
+    TEJOptionsDailyTrading
+)
 
 class ToolRegistry:
     def __init__(self):
@@ -188,6 +204,28 @@ class ToolRegistry:
                 d1 = datetime.strptime(str(end)[:10], "%Y-%m-%d")
                 if (d1 - d0).days > 366:
                     warnings.append("warn:date_span_too_large")
+                
+                # [Phase 3 Update] Future Date Guard
+                current_dt = datetime.now()
+                
+                # Case 1: Start date is in the future -> Error
+                if d0 > current_dt:
+                    raise ToolRecoverableError(
+                        message=f"❌ 日期錯誤：起始日期 ({d0.strftime('%Y-%m-%d')}) 超過了今日 ({current_dt.strftime('%Y-%m-%d')})。\n請不要查詢未來數據。",
+                        metadata={"hint": "check_current_date", "current_date": current_dt.strftime('%Y-%m-%d')}
+                    )
+                
+                # Case 2: End date is in the future -> Auto-Cap to today and warn
+                if d1 > current_dt:
+                    # Cap the end date in params
+                    new_end = current_dt.strftime('%Y-%m-%d')
+                    if p.get("mdate.lte"): p["mdate.lte"] = new_end
+                    if p.get("end_date"): p["end_date"] = new_end
+                    
+                    warnings.append(f"warn:end_date_capped_to_today (Original: {d1.strftime('%Y-%m-%d')})")
+
+            except ToolRecoverableError:
+                raise
             except Exception:
                 warnings.append("warn:date_parse_failed")
         return p, warnings
@@ -212,6 +250,16 @@ class ToolRegistry:
             dt = result.get("datatable") if isinstance(result.get("datatable"), dict) else None
             data = dt.get("data") if isinstance(dt and dt.get("data"), list) else None
             meta = (dt.get("meta") if isinstance(dt, dict) else None)
+        # [CRITICAL FIX] TEJ Error Guard (Registry Level)
+        # Check warnings FIRST before returning any data (even empty list)
+        if warnings:
+            for w in warnings:
+                if "date_span_too_large" in str(w):
+                     raise ToolRecoverableError(
+                        message="查詢失敗：TEJ 拒絕處理此請求，原因為「日期範圍過大 (date_span_too_large)」。請務必將日期範圍縮小至 90 天以內（例如：2024-01-01 到 2024-03-31），並使用多次查詢來獲取長週期數據。",
+                        metadata={"hint": "shrink_date_range", "max_days": 90}
+                    )
+
         if isinstance(data, list):
             out = {"data": data}
             if meta is not None:
@@ -219,6 +267,7 @@ class ToolRegistry:
             if warnings:
                 out["warnings"] = warnings
             return out
+            
         # 無法標準化，回傳原始並帶警示
         if warnings:
             result["warnings"] = warnings
@@ -256,14 +305,19 @@ class ToolRegistry:
 
         # 3. 檢查快取
         cache_key = None
+        # [Cache Bypass] Check if bypass is requested
+        bypass_cache = params.pop("_bypass_cache", False)
+        
         if cache_ttl and cache_ttl > 0:
             cache_key = self._get_cache_key(tool_id, params, exclude_params=cache_exclude)
-            cached_result = self._redis_client.get(cache_key)
-            if cached_result:
-                result = json.loads(cached_result)
-                result["used_cache"] = True
-                result["_meta"] = {"exec_time": 0, "source": "cache"}
-                return result
+            
+            if not bypass_cache:
+                cached_result = self._redis_client.get(cache_key)
+                if cached_result:
+                    result = json.loads(cached_result)
+                    result["used_cache"] = True
+                    result["_meta"] = {"exec_time": 0, "source": "cache"}
+                    return result
 
         # 4. 執行工具
         try:
@@ -372,4 +426,36 @@ class ToolRegistry:
         }
 
 tool_registry = ToolRegistry()
+
+# Register new tool
+tool_registry.register(VerifiedPriceAdapter(), version="v1", group="financial")
+tool_registry.register(TWSEStockDay(), version="v1", group="financial")
+tool_registry.register(YahooPriceAdapter(), version="v1", group="financial")
+
+# TEJ Tools Registration
+tool_registry.register(TEJCompanyInfo(), version="v1", group="tej")
+tool_registry.register(TEJStockPrice(), version="v1", group="tej")
+tool_registry.register(TEJMonthlyRevenue(), version="v1", group="tej")
+tool_registry.register(TEJInstitutionalHoldings(), version="v1", group="tej")
+tool_registry.register(TEJMarginTrading(), version="v1", group="tej")
+tool_registry.register(TEJForeignHoldings(), version="v1", group="tej")
+tool_registry.register(TEJFinancialSummary(), version="v1", group="tej")
+tool_registry.register(TEJFundNAV(), version="v1", group="tej")
+tool_registry.register(TEJShareholderMeeting(), version="v1", group="tej")
+tool_registry.register(TEJFundBasicInfo(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundInfo(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundDividend(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundHoldingsRegion(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundHoldingsIndustry(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundNAVRank(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundNAVDaily(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundSuspension(), version="v1", group="tej")
+tool_registry.register(TEJOffshoreFundPerformance(), version="v1", group="tej")
+tool_registry.register(TEJIFRSAccountDescriptions(), version="v1", group="tej")
+tool_registry.register(TEJFinancialCoverCumulative(), version="v1", group="tej")
+tool_registry.register(TEJFinancialSummaryQuarterly(), version="v1", group="tej")
+tool_registry.register(TEJFinancialCoverQuarterly(), version="v1", group="tej")
+tool_registry.register(TEJFuturesData(), version="v1", group="tej")
+tool_registry.register(TEJOptionsBasicInfo(), version="v1", group="tej")
+tool_registry.register(TEJOptionsDailyTrading(), version="v1", group="tej")
 
