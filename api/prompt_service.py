@@ -8,11 +8,25 @@ PROMPTS_SYSTEM_DIR = "prompts/system"
 
 class PromptService:
     _file_cache = {}
+    _base_contract = None
+
+    @classmethod
+    def load_base_contract(cls):
+        """加載 Base Contract"""
+        contract_path = os.path.join(PROMPTS_SYSTEM_DIR, "base_contract.yaml")
+        if os.path.exists(contract_path):
+            try:
+                with open(contract_path, "r", encoding="utf-8") as f:
+                    cls._base_contract = yaml.safe_load(f)
+                print(f"Loaded Base Contract from {contract_path}")
+            except Exception as e:
+                print(f"Error loading Base Contract: {e}")
 
     @classmethod
     def load_defaults_from_file(cls):
         """從 YAML 文件加載預設 Prompt (掃描目錄)"""
         cls._file_cache = {}
+        cls.load_base_contract()
         
         if not os.path.exists(PROMPTS_SYSTEM_DIR):
             print(f"Warning: Prompts directory not found at {PROMPTS_SYSTEM_DIR}")
@@ -94,3 +108,55 @@ class PromptService:
             return PromptService._file_cache[key]
 
         return ""
+
+    @classmethod
+    def compose_system_prompt(cls, db: Session, agent_key: str = None, override_content: str = None) -> str:
+        """
+        組合最終的 System Prompt (Base Contract + Agent Persona)。
+        
+        Args:
+            db: 資料庫 Session
+            agent_key: Agent 的 Prompt Key (e.g., 'agents.risk_officer')，若無則只返回 Contract
+            override_content: 直接傳入的 Agent Persona 內容 (可選)
+            
+        Returns:
+            str: 完整的 System Prompt
+        """
+        # 1. Load Base Contract
+        if not cls._base_contract:
+            cls.load_base_contract()
+            
+        contract_text = ""
+        if cls._base_contract:
+            c = cls._base_contract
+            inst_principle = c.get('institution', {}).get('principle', '')
+            boundaries = "\n".join([f"- {b}" for b in c.get('contract', {}).get('boundaries', [])])
+            failures = "\n".join([f"- [{f['status']}] {f['description']} -> {f['action']}" for f in c.get('contract', {}).get('legal_failures', [])])
+            protocol = "\n".join([f"- {p}" for p in c.get('contract', {}).get('protocol', [])])
+            
+            contract_text = f"""
+# System Institution: {c.get('institution', {}).get('name', 'Debate System')}
+Principle: {inst_principle}
+
+# Base Contract (MUST FOLLOW)
+
+## 1. Boundaries
+{boundaries}
+
+## 2. Legal Failure States
+{failures}
+
+## 3. Output Protocol
+{protocol}
+"""
+
+        # 2. Load Agent Persona
+        persona_text = ""
+        if override_content:
+            persona_text = override_content
+        elif agent_key:
+            persona_text = cls.get_prompt(db, agent_key, default="")
+
+        # 3. Combine
+        full_prompt = f"{contract_text}\n\n# Agent Role & Specific Instructions\n{persona_text}"
+        return full_prompt.strip()

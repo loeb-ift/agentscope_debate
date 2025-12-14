@@ -15,6 +15,7 @@ flowchart LR
     W2[DebateCycle]
     W3[Chairman]
     W4[Tool Invoker]
+    W5[GuardrailAgent]
   end
 
   subgraph Redis
@@ -50,3 +51,4 @@ flowchart LR
   Worker -->|ORM| Database
 
   W1 --> W2 --> W3 --> LLM
+  W2 --> W5 --> LLM

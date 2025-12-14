@@ -304,7 +304,7 @@ checker:
       test:
         - unique_results
 
-    android: &test_android
+    android:
       matrix:
         query: ["android"]
         lang: ["en", "de", "fr", "zh-CN"]
@@ -2788,20 +2788,20 @@ engines:
     title_query: title
     content_query: description
 
-  - name: bing api
-    engine: json_engine
-    shortcut: biapi
-    search_url: https://api.bing.microsoft.com/v7.0/search?q={query}&offset={pageno}&count=10
-    headers:
-      Ocp-Apim-Subscription-Key: __BING_SEARCH_API_KEY__
-    page_size: 10
-    first_page_num: 0
-    paging: true
-    results_query: webPages/value
-    url_query: url
-    title_query: name
-    content_query: snippet
-    disabled: true
+  # - name: bing api
+  #   engine: json_engine
+  #   shortcut: biapi
+  #   search_url: https://api.bing.microsoft.com/v7.0/search?q={query}&offset={pageno}&count=10
+  #   headers:
+  #     Ocp-Apim-Subscription-Key: __BING_SEARCH_API_KEY__
+  #   page_size: 10
+  #   first_page_num: 0
+  #   paging: true
+  #   results_query: webPages/value
+  #   url_query: url
+  #   title_query: name
+  #   content_query: snippet
+  #   disabled: true
 
   - name: google cse
     engine: json_engine

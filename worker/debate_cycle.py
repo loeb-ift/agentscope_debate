@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 from worker.chairman import Chairman
+from worker.guardrail_agent import GuardrailAgent
 from agentscope.agent import AgentBase
 import json
 import re
@@ -78,6 +79,9 @@ class DebateCycle:
             "total_time": 0.0,
             "estimated_cost": 0.0
         }
+        
+        # [Governance] Guardrail Agent
+        self.guardrail_agent = GuardrailAgent()
 
     def _log_to_file(self, message: str):
         """Append message to the realtime stream log."""
@@ -484,29 +488,52 @@ class DebateCycle:
                      if dates:
                          found_date = max(dates)
             
-            # [Fix] Fallback Probe if no recent data (System time might be in future)
+            # [Fix] Fallback Probe with Multi-Step Query (Chunking)
+            # If recent data missing, look back iteratively in 90-day chunks up to 1 year
             if not found_date:
-                self._publish_log("System", "⚠️ 無近期數據，嘗試擴大搜索範圍 (Fallback Probe)...")
-                # Look back 2 years to find ANY data
-                start_date_fb = (today - timedelta(days=730)).strftime("%Y-%m-%d")
-                params_fb = {
-                    "coid": "2330.TW",
-                    "mdate.gte": start_date_fb,
-                    "mdate.lte": end_date,
-                    "opts.limit": 100,
-                    "sort": "mdate.desc" # Try sorting if supported to get latest
-                }
-                result_fb = await loop.run_in_executor(None, call_tool, "tej.stock_price", params_fb)
-                if isinstance(result_fb, dict):
-                     data = result_fb.get("data") or result_fb.get("results")
-                     if isinstance(data, list) and data:
-                         dates = []
-                         for row in data:
-                             d = row.get("mdate")
-                             if d:
-                                 dates.append(str(d).split("T")[0])
-                         if dates:
-                             found_date = max(dates)
+                self._publish_log("System", "⚠️ 無近期數據，啟動長週期回溯搜索 (Multi-Step Probe)...")
+                
+                # Try up to 4 quarters back (approx 1 year)
+                for i in range(1, 5):
+                    # Calculate chunk window (shifting back 90 days each time)
+                    # Window: [Today - 90*(i+1), Today - 90*i]
+                    # But we want continuous coverage backward.
+                    # Previous probe was [Today-60, Today]
+                    # Let's do strictly 90-day chunks backward from Today-60
+                    
+                    chunk_end_dt = today - timedelta(days=60 + (i-1)*90)
+                    chunk_start_dt = chunk_end_dt - timedelta(days=90)
+                    
+                    chunk_start = chunk_start_dt.strftime("%Y-%m-%d")
+                    chunk_end = chunk_end_dt.strftime("%Y-%m-%d")
+                    
+                    self._publish_log("System", f"🔍 回溯探測 ({i}/4): {chunk_start} ~ {chunk_end}")
+                    
+                    params_chunk = {
+                        "coid": "2330.TW",
+                        "mdate.gte": chunk_start,
+                        "mdate.lte": chunk_end,
+                        "opts.limit": 100,
+                        "sort": "mdate.desc"
+                    }
+                    
+                    try:
+                        result_chunk = await loop.run_in_executor(None, call_tool, "tej.stock_price", params_chunk)
+                        if isinstance(result_chunk, dict):
+                             data = result_chunk.get("data") or result_chunk.get("results")
+                             if isinstance(data, list) and data:
+                                 dates = []
+                                 for row in data:
+                                     d = row.get("mdate")
+                                     if d:
+                                         dates.append(str(d).split("T")[0])
+                                 if dates:
+                                     found_date = max(dates)
+                                     self._publish_log("System", f"✅ 在回溯中找到數據: {found_date}")
+                                     break # Found it, stop looking back
+                    except Exception as ex:
+                        print(f"Probe chunk failed: {ex}")
+                        continue
 
             if found_date:
                 self.latest_db_date = found_date
@@ -716,7 +743,10 @@ class DebateCycle:
                     if v_symbol and v_date:
                         self._publish_log(f"{agent.name} (Verification)", f"⚡ 切換至審計工具 (financial.get_verified_price) 進行交叉驗證...")
                         # Use Auditor Tool
-                        verify_result = await loop.run_in_executor(None, call_tool, "financial.get_verified_price", {"symbol": v_symbol, "date": str(v_date)[:10]})
+                        # [Fix] Ensure date format is YYYYMMDD for TWSE (financial.get_verified_price)
+                        # v_date usually comes as YYYY-MM-DD from TEJ params.
+                        clean_date = str(v_date)[:10].replace("-", "")
+                        verify_result = await loop.run_in_executor(None, call_tool, "financial.get_verified_price", {"symbol": v_symbol, "date": clean_date})
                         is_auditor_check = True
                 
                 # If not price tool or param extraction failed, fall back to exact re-execution
@@ -1181,7 +1211,8 @@ class DebateCycle:
             if side in ["pro", "con"]:
                 # Pro/Con prioritize Verified Price (High Precision + Fallback)
                 # Highlight verified tools
-                sorted_tools.extend([{"name": t['name'], "description": f"[推薦:官方驗證/高精度] {t['description']}"} for t in official_tools])
+                # [Priority Adjustment] TWSE/Official tools first due to TEJ lag
+                sorted_tools.extend([{"name": t['name'], "description": f"[推薦:2025最新數據/官方驗證] {t['description']}"} for t in official_tools])
                 sorted_tools.extend(tej_tools) # Other TEJ tools
                 sorted_tools.extend(backup_tools)
                 sorted_tools.extend(other_tools)
@@ -1456,48 +1487,33 @@ class DebateCycle:
         db = SessionLocal()
         try:
             # 1. System Prompt Construction
-            # Strategy: Combine Agent's Custom Persona with System's Operational Rules
+            # [Governance] Use PromptService.compose_system_prompt to inject Base Contract
             
-            # A. Operational Rules (Externalized)
-            operational_rules = PromptService.get_prompt(db, "debater.operational_rules")
-            if not operational_rules:
-                operational_rules = f"""System Rules: Use tools first.
-【資料查詢重要須知 (TEJ)】
-1. **資料庫時間限制**: 本系統資料庫最新數據僅更新至 **{self.latest_db_date}**。請勿查詢此日期之後的數據（例如不要查今天或未來），否則只會得到空值。
-2. **日期錯誤處理**: 若收到「日期範圍過大」錯誤，**絕對不要懷疑公司代碼**。請直接**縮短日期範圍**（建議 90 天以內）。
-3. **禁止瞎掰 (Data Honesty)**: 若工具回傳空資料 (`[]`)，**嚴禁**編造股價趨勢或下跌原因。你必須誠實回報「數據不足」並請求暫停或更換分析角度。
-4. **禁止重複**: 若已知公司 ID，請勿重複搜尋名稱。
-"""
-            
-            # B. Agent Persona (Custom or Default)
+            # A. Prepare Agent Persona
             custom_prompt = getattr(agent, 'system_prompt', '').strip()
-            if custom_prompt:
-                persona_section = f"""
-**你的角色設定 (Persona)**：
+            if not custom_prompt:
+                custom_prompt = f"你是 {agent.name}，代表 {side} 方。"
+            
+            # Additional Context
+            persona_context = f"""
 {custom_prompt}
 
-你是 {agent.name}，代表 {side} 方。
 辯題：{self.topic}
+立場：{side}
 """
-            else:
-                persona_section = f"""
-**你的角色設定 (Persona)**：
-你是 {agent.name}，代表 {side} 方。
-辯題：{self.topic}
-"""
+            # B. Operational Rules (Externalized)
+            operational_rules = PromptService.get_prompt(db, "debater.operational_rules")
+            if not operational_rules:
+                # Minimal fallback if not found
+                operational_rules = "System Rules: Use tools first. Do NOT fabricate data."
 
             # [Phase 18] Dynamic Data Honesty Rules
-            honesty_rule = ""
             if self.latest_db_date:
-                honesty_rule = f"\nSystem Note: The database data ends on {self.latest_db_date}. Do not query future dates."
-            
-            honesty_rule += "\nSystem Rule: Do NOT fabricate data. If data is missing, state 'Insufficient Data' or use search tools."
+                operational_rules += f"\nSystem Note: The database data ends on {self.latest_db_date}. Do not query future dates."
 
-            # Combine
-            default_system = f"{persona_section}\n{operational_rules}\n{honesty_rule}"
-            
-            # Try to get override from DB, but prioritize constructing it dynamically if not found
-            system_prompt = default_system
+            # C. Compose Final System Prompt
+            final_persona = f"{persona_context}\n\n# Operational Rules\n{operational_rules}"
+            system_prompt = PromptService.compose_system_prompt(db, override_content=final_persona)
             
             # 2. User Prompt (Tool Instruction)
             user_template = PromptService.get_prompt(db, "debater.tool_instruction")
@@ -1512,8 +1528,8 @@ class DebateCycle:
             fallback_hint = """
 
 💡 **重要提示 (Fallback Strategy)**：
-1. **數據獲取優先級**: `tej.stock_price` (首選) -> `twse.stock_day` (官方備用) -> `yahoo.stock_price` (最後手段)。
-2. **遇到空數據時**: 若 `tej` 回傳空列表 `[]`，這通常是因為**日期範圍不匹配**或**資料庫未更新**。請立即嘗試使用 `twse.stock_day` 或 `yahoo.stock_price` 查詢相同標的。
+1. **數據獲取優先級**: `twse.stock_day` (首選, 2025年最新數據) -> `tej.stock_price` (備用, 歷史回測) -> `yahoo.stock_price` (最後手段)。
+2. **遇到空數據時**: 若 `tej` 回傳空列表 `[]`，這通常是因為資料庫尚未更新至 2025 年。請立即改用 `twse.stock_day` 查詢最新數據。
 3. **搜尋關鍵字優化**: 若需使用 `searxng` 查找財報或新聞，**請勿僅搜尋代碼**。
    - ❌ 避免: `"2330"`
    - ✅ 推薦: `"2330.TW 2024 Q4 營收 YoY"` 或 `"台積電 法說會 重點"`
@@ -1543,6 +1559,10 @@ class DebateCycle:
         collected_evidence = [] # Track evidence for fallback report
         tool_call_history = [] # Track last N tool calls to prevent loops (A-B-A patterns)
         
+        # [Governance] Retry Loop Context
+        guardrail_retries = 0
+        MAX_GUARDRAIL_RETRIES = 2
+        
         while True: # Outer Loop for Extension Retry
             while current_step < max_steps:
                 current_step += 1
@@ -1570,42 +1590,51 @@ class DebateCycle:
                 # [Realtime] Log trace details
                 self._log_to_file(f"--- [LLM IO] {agent.name} Step {current_step} ---\nPrompt Preview: {current_prompt[:200]}...\nResponse Preview: {response[:200]}...")
 
-                # --- [Optimization Phase 3] Pre-Flight Check (Output Validation) ---
-                # 簡單的輸出檢查，攔截明顯錯誤
-                validation_error = None
+                # --- [Governance] Guardrail Check ---
+                # Check ALL text responses, and potentially Tool Calls (if we want to block dangerous tools)
+                # Here we check Text Responses (non-tool calls) primarily to stop Hallucination/Scope Creep
+                is_tool_call = False
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    try:
+                        tool_call_test = json.loads(json_match.group(0))
+                        if isinstance(tool_call_test, dict) and "tool" in tool_call_test:
+                            is_tool_call = True
+                    except:
+                        pass
                 
-                # 1. Empty Check
-                if not response or len(response.strip()) < 5:
-                    validation_error = "Response too short or empty."
-                
-                # 2. Hallucination Check (Basic Ticker Validation)
-                # If agent explicitly cites a ticker format "Ticker: XXXX" or "代碼: XXXX"
-                # We verify if it looks like a valid format (e.g., 4 digits for TW stock)
-                # This is a soft check to prevent blatant hallucinations of format.
-                ticker_matches = re.findall(r'(?:Ticker|代碼)[:：]\s*([0-9A-Z]+)', response, re.IGNORECASE)
-                for t in ticker_matches:
-                    if t.isdigit() and len(t) != 4: # TW stock usually 4 digits
-                         # This might be too strict for other markets, so we be careful.
-                         # Just flagging 3-digit numbers as suspicious for TW context.
-                         if len(t) < 4:
-                             validation_error = f"Suspicious ticker format '{t}'. TW stocks usually have 4 digits."
-                
-                # If validation failed, reject and ask to retry (without consuming a step? or consume?)
-                # We consume a step to prevent infinite loops of bad output.
-                if validation_error and "tool" not in response: # Skip check for tool calls (JSON)
-                     print(f"❌ Output Validation Failed for {agent.name}: {validation_error}")
-                     self._publish_log(f"{agent.name} (System)", f"⚠️ 輸出被攔截：{validation_error}")
-                     current_prompt = f"系統提示：你的上一次輸出被拒絕，原因：{validation_error}。\n請修正後重新輸出。"
-                     continue
-                # -------------------------------------------------------------------
+                # Guardrail Logic: Intercept final speech or reasoning steps
+                if not is_tool_call:
+                    check_context = f"Topic: {self.topic}\nLast Evidence: {str(collected_evidence[-1]) if collected_evidence else 'None'}"
+                    audit_result = self.guardrail_agent.check(agent.name, response, check_context)
+                    
+                    if audit_result["status"] == "REJECTED":
+                        self._publish_log("Guardrail", f"⛔ 攔截違規發言 ({audit_result['violation_type']}): {audit_result['reason']}")
+                        
+                        if guardrail_retries < MAX_GUARDRAIL_RETRIES:
+                            guardrail_retries += 1
+                            current_prompt = f"【Guardrail 合規警告】\n你的回答被拒絕，原因：{audit_result['reason']}。\n修正指令：{audit_result['correction_instruction']}\n\n請根據指令修正後重新輸出。"
+                            
+                            # Log Audit Event
+                            self.redis_client.publish("guardrail:audit", json.dumps({
+                                "debate_id": self.debate_id,
+                                "agent": agent.name,
+                                "action": "REJECTED",
+                                "reason": audit_result["reason"]
+                            }, ensure_ascii=False))
+                            
+                            # Decrease step count to not penalize retry? Or consume step?
+                            # Design: Consume step to force convergence.
+                            continue
+                        else:
+                            self._publish_log("Guardrail", f"⚠️ 重試次數過多，強制放行 (標記為風險內容)。")
+                            # Force Pass but Log Warning
+                            # (Proceed as normal)
+                    elif audit_result["status"] == "WARNING":
+                         self._publish_log("Guardrail", f"⚠️ 合規警告: {audit_result['reason']}")
 
-                # Retry 機制 (Only for empty response on first step)
-                # (Merged into validation above, but keeping logic flow)
-                if not response and current_step == 1:
-                    print(f"WARNING: Empty response from {agent.name}, retrying with simple prompt...")
-                    retry_prompt = f"請針對辯題「{self.topic}」發表你的{side}論點。請務必使用繁體中文。"
-                    response = await call_llm_async(retry_prompt, system_prompt=system_prompt, context_tag=f"{self.debate_id}:{agent.name}")
-                
+                # ------------------------------------
+
                 # Check for tool call
                 try:
                     # 嘗試提取 JSON
@@ -1667,6 +1696,23 @@ class DebateCycle:
                             print(f"🚨 Agent {agent.name} is calling Chairman for help: {reason}")
                             self._publish_log(f"{agent.name} (SOS)", f"請求主席介入：{reason}")
 
+                            # [Loop Fix] Auto-Equip Tools on "Missing Data" complaints
+                            # If reason contains "lack", "missing", "data", "price", "stock" -> try to equip fallback tools
+                            triggers = ["缺", "miss", "data", "數據", "資料", "price", "stock", "股價", "2480"]
+                            if any(t in reason.lower() for t in triggers):
+                                fallback_tools = ["financial.get_verified_price", "tej.stock_price", "yahoo.stock_price"]
+                                added_tools = []
+                                current_tools = self.agent_tools_map.get(agent.name, [])
+                                
+                                for ft in fallback_tools:
+                                    if ft not in current_tools:
+                                        current_tools.append(ft)
+                                        added_tools.append(ft)
+                                
+                                if added_tools:
+                                    self.agent_tools_map[agent.name] = current_tools
+                                    self._publish_log("System", f"🛠️ [Auto-Fix] 偵測到 Agent 缺少數據工具，已自動為 {agent.name} 裝備：{', '.join(added_tools)}")
+
                             chairman_prompt = f"Agent {agent.name} ({side}方) 在分析辯題「{self.topic}」時遇到困難。\n回報原因：{reason}\n請根據你的賽前分析手卡，提供引導。"
                             clarification = await call_llm_async(chairman_prompt, system_prompt="你是辯論主席。請協助遇到困難的辯手。")
                             
@@ -1720,6 +1766,10 @@ class DebateCycle:
                             
                             if cached_result:
                                 tool_result = cached_result['result']
+                                
+                                # [Memory Opt] Mark as Adopted since we are using it
+                                await self.hippocampus.mark_adopted(tool_name, params)
+                                
                                 # Create a preview string for debugging
                                 try:
                                     result_str = json.dumps(tool_result, ensure_ascii=False)

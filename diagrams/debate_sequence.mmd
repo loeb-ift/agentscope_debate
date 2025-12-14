@@ -5,6 +5,7 @@ sequenceDiagram
   participant R as Redis (Broker/Backend)
   participant W as Worker (Celery)
   participant CH as Chairman
+  participant GR as Guardrail
   participant L as LLM (Ollama)
   participant DB as Database
 
@@ -25,6 +26,15 @@ sequenceDiagram
 
   loop Rounds
     W->>W: alternate speakers pro/con
+    
+    loop Guardrail Check
+      W->>L: generate response
+      L-->>W: response content
+      W->>GR: check(content)
+      GR->>L: (if rejected) correction instruction
+      GR-->>W: PASSED / REJECTED
+    end
+
     W->>R: gather evidence (list)
     W->>CH: summarize_round
     CH->>R: read evidence
