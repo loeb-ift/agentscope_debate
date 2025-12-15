@@ -49,8 +49,11 @@ class PriceProofCoordinator:
         # 2. Symbol Normalization
         norm_res = normalize_symbol(symbol)
         clean_symbol = norm_res["coid"] # Plain ID (e.g. 2330)
-        
-        print(f"[PriceProof] Fetching {clean_symbol} for {target_date} (Window: {start_date_str} ~ {end_date_str})")
+        yahoo_ticker = norm_res.get("yahoo_ticker", clean_symbol) # Proper ticker for Yahoo (e.g. 8069.TWO)
+        market = norm_res.get("market", "TW")
+        exchange = norm_res.get("exchange", "Unknown")
+
+        print(f"[PriceProof] Fetching {clean_symbol} (Yahoo: {yahoo_ticker}, Exch: {exchange}) for {target_date} (Window: {start_date_str} ~ {end_date_str})")
         
         # --- Source 1: TEJ (Primary) ---
         try:
@@ -74,54 +77,68 @@ class PriceProofCoordinator:
             print(f"[PriceProof] TEJ Failed: {e}")
 
         # --- Source 2: TWSE (Secondary - Official) ---
-        try:
-            print("[PriceProof] Fallback to TWSE...")
-            # TWSE adapter takes 'symbol' and 'date' (month level) or range?
-            # Our TWSEStockDay uses 'date' (YYYY-MM-DD) to find that specific month
-            # It returns the whole month. We need to filter.
-            
-            # Using loop.run_in_executor for sync adapter calls if needed, but here we just call directly
-            # assuming adapters are fast enough or we accept blocking for now (or make adapters async later)
-            twse_res = self.twse_adapter.invoke(symbol=clean_symbol, date=target_date)
-            
-            if twse_res.get("data"):
-                # TWSE returns list of days in that month. We need to find the target date or nearest past date.
-                # Assuming data is sorted? Usually TWSE returns chronological.
-                # Let's search for exact match first, then closest previous.
+        # Skip TWSE if it's an OTC stock (TPEx)
+        if exchange == 'TPEx':
+            print(f"[PriceProof] Skipping TWSE for OTC stock {clean_symbol}")
+        else:
+            try:
+                print("[PriceProof] Fallback to TWSE...")
+                # TWSE adapter takes 'symbol' and 'date' (month level) or range?
+                # Our TWSEStockDay uses 'date' (YYYY-MM-DD) to find that specific month
+                # It returns the whole month. We need to filter.
                 
-                rows = twse_res["data"]
-                # Filter rows within our window
-                valid_rows = [r for r in rows if start_date_str <= r["date"] <= end_date_str]
+                # Using loop.run_in_executor for sync adapter calls if needed, but here we just call directly
+                # assuming adapters are fast enough or we accept blocking for now (or make adapters async later)
                 
-                if valid_rows:
-                    # Get latest (max date)
-                    best_match = max(valid_rows, key=lambda x: x["date"])
+                # Convert YYYY-MM-DD to YYYYMMDD for TWSE
+                twse_date = target_date.replace("-", "")
+                twse_res = self.twse_adapter.invoke(symbol=clean_symbol, date=twse_date)
+                
+                # Handle ToolResult object or dict
+                twse_data = twse_res.data if hasattr(twse_res, 'data') else twse_res.get("data")
+                
+                if twse_data:
+                    # TWSE returns list of days in that month. We need to find the target date or nearest past date.
+                    # Assuming data is sorted? Usually TWSE returns chronological.
+                    # Let's search for exact match first, then closest previous.
                     
-                    return {
-                        "status": "success",
-                        "source": "TWSE (Official Backup)",
-                        "symbol": clean_symbol,
-                        "date": best_match["date"],
-                        "price": best_match["close"],
-                        "data": best_match,
-                        "verified": True,
-                        "fallback_used": True
-                    }
-            print("[PriceProof] TWSE returned empty data or no match in window.")
-        except Exception as e:
-            print(f"[PriceProof] TWSE Failed: {e}")
+                    rows = twse_data.get("rows", []) # TWSE adapter result structure has "rows"
+                    # Filter rows within our window
+                    valid_rows = [r for r in rows if start_date_str <= r["date"] <= end_date_str]
+                    
+                    if valid_rows:
+                        # Get latest (max date)
+                        best_match = max(valid_rows, key=lambda x: x["date"])
+                        
+                        return {
+                            "status": "success",
+                            "source": "TWSE (Official Backup)",
+                            "symbol": clean_symbol,
+                            "date": best_match["date"],
+                            "price": best_match["close"],
+                            "data": best_match,
+                            "verified": True,
+                            "fallback_used": True
+                        }
+                print("[PriceProof] TWSE returned empty data or no match in window.")
+            except Exception as e:
+                print(f"[PriceProof] TWSE Failed: {e}")
 
         # --- Source 3: Yahoo (Fallback - External) ---
         try:
             print("[PriceProof] Fallback to Yahoo...")
             yahoo_res = self.yahoo_adapter.invoke(
-                symbol=clean_symbol,
+                symbol=yahoo_ticker,
                 start_date=start_date_str,
                 end_date=end_date_str
             )
             
-            if yahoo_res.get("data"):
-                latest = yahoo_res["data"][0] # Assumed sorted desc
+            # Handle ToolResult or dict (Yahoo adapter returns dict directly in code I saw, but verify)
+            # YahooPriceAdapter.invoke returns dict directly based on read file
+            yahoo_data = yahoo_res.get("data") if isinstance(yahoo_res, dict) else (yahoo_res.data if hasattr(yahoo_res, 'data') else None)
+
+            if yahoo_data:
+                latest = yahoo_data[0] # Assumed sorted desc
                 return {
                     "status": "success",
                     "source": "Yahoo Finance (External Backup)",
@@ -162,9 +179,11 @@ class PriceProofCoordinator:
                 }
                 
             # Try Yahoo second
-            yahoo_res = self.yahoo_adapter.invoke(clean_symbol, start_fb, target_date)
-            if yahoo_res.get("data"):
-                latest = yahoo_res["data"][0]
+            yahoo_res = self.yahoo_adapter.invoke(symbol=yahoo_ticker, start_date=start_fb, end_date=target_date)
+            yahoo_data = yahoo_res.get("data") if isinstance(yahoo_res, dict) else (yahoo_res.data if hasattr(yahoo_res, 'data') else None)
+            
+            if yahoo_data:
+                latest = yahoo_data[0]
                 return {
                     "status": "success",
                     "source": "Yahoo (Latest Available)",
