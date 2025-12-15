@@ -19,6 +19,7 @@ from api.database import SessionLocal
 from api import models
 import requests
 from api.config import Config
+from api.prompt_service import PromptService
 
 def check_services():
     """Check connectivity to dependent services."""
@@ -30,7 +31,7 @@ def check_services():
         # We don't block here because maybe it's just root path 404, but at least we log it.
 
 @app.task(bind=True)
-def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
+def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int, enable_cross_examination: bool = True):
     """
     執行辯論循環並將結果存檔。
     teams_config format: [{"name": "Team A", "side": "pro", "agents": [...]}, ...]
@@ -61,7 +62,22 @@ def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
                     agent.id = c.get('id')  # Important for toolset lookup
                     agent.role = c.get('role', 'debater')
                     agent.specialty = c.get('specialty', '')
-                    agent.system_prompt = c.get('system_prompt', '')
+                    
+                    # Apply Base Contract to System Prompt
+                    raw_prompt = c.get('system_prompt', '')
+                    
+                    # Create a temporary DB session to load prompt contract if needed
+                    # (Though PromptService handles caching, explicit DB passing is cleaner)
+                    # For now, we use a fresh session just for prompt composition to be safe
+                    db_prompt = SessionLocal()
+                    try:
+                        agent.system_prompt = PromptService.compose_system_prompt(
+                            db_prompt,
+                            override_content=raw_prompt
+                        )
+                    finally:
+                        db_prompt.close()
+
                     agent.config = c.get('config', {})
                 else:
                     agent.name = "辯士"
@@ -78,10 +94,11 @@ def run_debate_cycle(self, topic: str, teams_config: List[Dict], rounds: int):
         # Create default pro/con
         pass
 
-    debate = DebateCycle(debate_id, topic, chairman, debate_teams, rounds)
+    debate = DebateCycle(debate_id, topic, chairman, debate_teams, rounds, enable_cross_examination=enable_cross_examination)
     # Use sync wrapper which calls async start internally
     debate_result = debate.start()
 
+    # Save Archive
     db = SessionLocal()
     try:
         archive = models.DebateArchive(

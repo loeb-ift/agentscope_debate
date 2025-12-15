@@ -35,6 +35,9 @@ class PromptService:
         yaml_files = glob.glob(os.path.join(PROMPTS_SYSTEM_DIR, "*.yaml"))
         
         for file_path in yaml_files:
+            if os.path.basename(file_path) == "base_contract.yaml":
+                continue
+                
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
@@ -129,25 +132,20 @@ class PromptService:
         contract_text = ""
         if cls._base_contract:
             c = cls._base_contract
-            inst_principle = c.get('institution', {}).get('principle', '')
-            boundaries = "\n".join([f"- {b}" for b in c.get('contract', {}).get('boundaries', [])])
-            failures = "\n".join([f"- [{f['status']}] {f['description']} -> {f['action']}" for f in c.get('contract', {}).get('legal_failures', [])])
-            protocol = "\n".join([f"- {p}" for p in c.get('contract', {}).get('protocol', [])])
+            rules = c.get('rules', {})
+            
+            rule_texts = []
+            for rule_name, content in rules.items():
+                instruction = content.get('instruction', '')
+                rule_texts.append(f"### {rule_name.upper()}\n{instruction}")
+            
+            contract_body = "\n\n".join(rule_texts)
             
             contract_text = f"""
-# System Institution: {c.get('institution', {}).get('name', 'Debate System')}
-Principle: {inst_principle}
+# System Base Contract (MUST FOLLOW)
+The following rules are non-negotiable and override any persona instructions.
 
-# Base Contract (MUST FOLLOW)
-
-## 1. Boundaries
-{boundaries}
-
-## 2. Legal Failure States
-{failures}
-
-## 3. Output Protocol
-{protocol}
+{contract_body}
 """
 
         # 2. Load Agent Persona
