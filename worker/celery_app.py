@@ -1,5 +1,7 @@
 import sys
 sys.path.insert(0, '/app')
+# Ensure local agentscope source is prioritized
+sys.path.insert(0, '/app/agentscope/src')
 
 from celery import Celery
 from dotenv import load_dotenv
@@ -22,10 +24,18 @@ from api.tool_registry import tool_registry
 load_dotenv()
 
 # 建立 Celery 實例
-app = Celery('worker', broker=Config.REDIS_URL, backend=Config.REDIS_URL)
+# Force include worker.tasks to ensure tasks are registered
+app = Celery('worker', broker=Config.REDIS_URL, backend=Config.REDIS_URL, include=['worker.tasks'])
 app.autodiscover_tasks(['worker'])
 
 # 在 worker 啟動時註冊工具
+
+# ChinaTimes Suite (Conditional) - Priority Registration
+if Config.ENABLE_CHINATIMES_TOOLS:
+    tool_registry.register_lazy("news.search_chinatimes", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesSearchAdapter"), group="browser_use", description="[PRIORITY] Search ChinaTimes News for Taiwan related topics")
+    tool_registry.register_lazy("chinatimes.stock_rt", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockRTAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Realtime Stock Data")
+    tool_registry.register_lazy("chinatimes.stock_news", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockNewsAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock News")
+
 # Browser Use Group
 tool_registry.register_lazy("searxng.search", lazy_import_factory("adapters.searxng_adapter", "SearXNGAdapter"), group="browser_use", description="Search Engine")
 tool_registry.register_lazy("duckduckgo.search", lazy_import_factory("adapters.duckduckgo_adapter", "DuckDuckGoAdapter"), group="browser_use", description="DuckDuckGo Search")

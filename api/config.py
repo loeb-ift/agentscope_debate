@@ -22,6 +22,13 @@ class Config:
     OLLAMA_EMBEDDING_HOST = os.getenv("OLLAMA_EMBEDDING_HOST", "http://ollama:11434") # Generic default
     OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest") # Generic default
 
+    # Quota Limits
+    SEARCH_PAID_DAILY_LIMIT = int(os.getenv("SEARCH_PAID_DAILY_LIMIT", 50))
+
+    # Feature Flags
+    ENABLE_CHINATIMES_TOOLS = os.getenv("ENABLE_CHINATIMES_TOOLS", "false").lower() == "true"
+
+
     # Metadata for UI
     CONFIG_DESCRIPTIONS = {
         "OLLAMA_HOST": "LLM 服務器地址 (例如 http://10.x.x.x:11434)",
@@ -42,7 +49,8 @@ class Config:
         "DEFAULT_LANGUAGE": "預設語言 (zh-TW)",
         "REDIS_HOST": "Redis 主機地址",
         "REDIS_URL": "Redis 連接 URL",
-        "DATABASE_URL": "資料庫連接 URL"
+        "DATABASE_URL": "資料庫連接 URL",
+        "SEARCH_PAID_DAILY_LIMIT": "付費搜尋每日配額限制"
     }
 
     @classmethod
