@@ -1,0 +1,12 @@
+services:
+  # --- Gateway (Unified Entry Point) ---
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "8090:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/index.html:/usr/share/nginx/html/index.html:ro
+    depends_on:
+      - web
+      # - web-v2 # Removed V2 dependency

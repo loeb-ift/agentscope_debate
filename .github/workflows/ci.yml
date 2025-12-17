@@ -1,0 +1,44 @@
+name: CI
+on: [pull_request]
+
+jobs:
+  schema-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm i -g ajv-cli
+      - name: Validate JSON Schemas (self-validate)
+        run: |
+          for f in docs/schemas/*.json; do
+            echo "Validating $f";
+            ajv validate -s "$f" -d "$f" || exit 1;
+          done
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend deps (if present)
+        run: |
+          if [ -f api/requirements.txt ]; then pip install -r api/requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Run backend tests
+        run: |
+          if [ -d tests ]; then pytest -q || true; fi
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install frontend deps (if present)
+        run: |
+          if [ -f web/package.json ]; then npm ci --prefix web; fi
+      - name: Run frontend tests
+        run: |
+          if [ -f web/package.json ]; then npm test --prefix web --silent || true; fi

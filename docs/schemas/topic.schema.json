@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/topic.schema.json",
+  "title": "Debate Topic",
+  "type": "object",
+  "required": ["title", "timeframe", "metric", "question_type"],
+  "properties": {
+    "title": { "type": "string", "minLength": 3 },
+    "description": { "type": "string" },
+    "timeframe": { "type": "string", "enum": ["1m", "3m", "6m", "1y"] },
+    "metric": { "type": "string", "enum": ["abs_price", "rel_to_index", "valuation"] },
+    "baseline": { "type": "string", "description": "參考指數/同業/產業" },
+    "question_type": { "type": "string", "enum": ["attribution", "market_explanations", "hypothesis_test"] },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": false
+}

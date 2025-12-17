@@ -5,7 +5,7 @@ from worker.memory import HippocampalMemory
 class SearchSharedMemory(ToolAdapter):
     name = "search_shared_memory"
     version = "v1"
-    description = "從共享海馬迴記憶中檢索過往的工具調用結果與知識。支援語義搜尋與來源過濾。"
+    description = "海馬迴共享記憶搜尋工具。檢索過往的工具調用結果與知識，支援語義搜尋與來源過濾。"
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -13,17 +13,17 @@ class SearchSharedMemory(ToolAdapter):
             "type": "object",
             "properties": {
                 "query": {
-                    "type": "string", 
-                    "description": "搜尋關鍵字或問題 (e.g., '台積電上季營收', '半導體產業趨勢')"
+                    "type": "string",
+                    "description": "搜尋問題或關鍵字 (例如：'台積電上季營收', '半導體產業趨勢')"
                 },
                 "filter_tool": {
                     "type": "string",
-                    "description": "過濾特定工具來源 (e.g., 'tej.stock_price', 'searxng.search')"
+                    "description": "指定工具來源進行過濾 (例如：'tej.stock_price', 'searxng.search')"
                 },
                 "limit": {
                     "type": "integer",
                     "default": 5,
-                    "description": "返回結果數量限制"
+                    "description": "返回的記憶片段數量上限"
                 }
             },
             "required": ["query"]

@@ -35,6 +35,7 @@ if Config.ENABLE_CHINATIMES_TOOLS:
     tool_registry.register_lazy("news.search_chinatimes", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesSearchAdapter"), group="browser_use", description="[PRIORITY] Search ChinaTimes News for Taiwan related topics")
     tool_registry.register_lazy("chinatimes.stock_rt", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockRTAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Realtime Stock Data")
     tool_registry.register_lazy("chinatimes.stock_news", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockNewsAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock News")
+    tool_registry.register_lazy("chinatimes.stock_kline", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockKlineAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock K-Line History (Day K)")
 
 # Browser Use Group
 tool_registry.register_lazy("searxng.search", lazy_import_factory("adapters.searxng_adapter", "SearXNGAdapter"), group="browser_use", description="Search Engine")

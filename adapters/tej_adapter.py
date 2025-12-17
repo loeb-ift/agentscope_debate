@@ -133,6 +133,12 @@ class TEJBaseAdapter(ToolAdapter):
         
         rows = raw.get("data")
         if rows is None:
+            # Check for datatable wrapper (common in some TEJ endpoints)
+            datatable = raw.get("datatable")
+            if isinstance(datatable, dict):
+                rows = datatable.get("data")
+        
+        if rows is None:
             rows = []
             
         print(f"DEBUG: TEJ API returned {len(rows)} rows.")
@@ -515,7 +521,9 @@ class TEJFundBasicInfo(TEJBaseAdapter):
 class TEJOffshoreFundInfo(TEJBaseAdapter):
     name = "tej.offshore_fund_info"
     version = "v1"
-    description = "查詢境外基金基本資料"
+    description = """查詢境外基金基本資料 (TRAIL/TAOFATT)
+    主要欄位: 基金代碼(coid)、基金名稱(fund_name)、發行公司(master_company)、
+    註冊地(registered_location)、計價幣別(currency)、成立日期(found_date)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -535,7 +543,9 @@ class TEJOffshoreFundInfo(TEJBaseAdapter):
 class TEJOffshoreFundDividend(TEJBaseAdapter):
     name = "tej.offshore_fund_dividend"
     version = "v1"
-    description = "查詢境外基金股息"
+    description = """查詢境外基金配息/股息資料 (TRAIL/TAOFCAN)
+    主要欄位: 除息日(ex_date)、發放日(pay_date)、配息金額(dividend)、
+    幣別(currency)、配息頻率(frequency)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -557,7 +567,8 @@ class TEJOffshoreFundDividend(TEJBaseAdapter):
 class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
     name = "tej.offshore_fund_holdings_region"
     version = "v1"
-    description = "查詢境外基金持股狀況-區域"
+    description = """查詢境外基金區域持股配置 (TRAIL/TAOFIVA)
+    主要欄位: 持股區域(region)、投資比重(percentage)、資料日期(mdate)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -579,7 +590,8 @@ class TEJOffshoreFundHoldingsRegion(TEJBaseAdapter):
 class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
     name = "tej.offshore_fund_holdings_industry"
     version = "v1"
-    description = "查詢境外基金持股狀況-產業"
+    description = """查詢境外基金產業持股配置 (TRAIL/TAOFIVP)
+    主要欄位: 產業類別(industry)、投資比重(percentage)、資料日期(mdate)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -601,7 +613,9 @@ class TEJOffshoreFundHoldingsIndustry(TEJBaseAdapter):
 class TEJOffshoreFundNAVRank(TEJBaseAdapter):
     name = "tej.offshore_fund_nav_rank"
     version = "v1"
-    description = "查詢境外基金淨值(月排名)"
+    description = """查詢境外基金淨值與排名統計 (TRAIL/TAOFMNV)
+    主要欄位: 年月(mdate)、淨值(nav)、同類型排名(rank)、總排名(total_rank)、
+    月報酬率(roi_1m)、年報酬率(roi_1y)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -623,7 +637,8 @@ class TEJOffshoreFundNAVRank(TEJBaseAdapter):
 class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
     name = "tej.offshore_fund_nav_daily"
     version = "v1"
-    description = "查詢境外基金淨值(日)"
+    description = """查詢境外基金每日淨值 (TRAIL/TAOFNAV)
+    主要欄位: 年月日(mdate)、基金代碼(coid)、淨值(nav)、幣別(currency)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -645,7 +660,8 @@ class TEJOffshoreFundNAVDaily(TEJBaseAdapter):
 class TEJOffshoreFundSuspension(TEJBaseAdapter):
     name = "tej.offshore_fund_suspension"
     version = "v1"
-    description = "查詢境外基金暫停計價紀錄"
+    description = """查詢境外基金暫停交易/計價紀錄 (TRAIL/TAOFSUSP)
+    主要欄位: 暫停日期(suspend_date)、恢復日期(resume_date)、暫停原因(reason)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -667,7 +683,9 @@ class TEJOffshoreFundSuspension(TEJBaseAdapter):
 class TEJOffshoreFundPerformance(TEJBaseAdapter):
     name = "tej.offshore_fund_performance"
     version = "v1"
-    description = "查詢境外基金績效"
+    description = """查詢境外基金績效表現 (TRAIL/TAOFUNDS)
+    主要欄位: 期間報酬率(日/週/月/季/年)、年化標準差(std_dev)、夏普值(sharpe_ratio)、
+    Beta值(beta)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -689,7 +707,8 @@ class TEJOffshoreFundPerformance(TEJBaseAdapter):
 class TEJIFRSAccountDescriptions(TEJBaseAdapter):
     name = "tej.ifrs_account_descriptions"
     version = "v1"
-    description = "查詢 IFRS 財務會計科目說明"
+    description = """查詢 IFRS 會計科目對照表 (TRAIL/TAIACC)
+    主要欄位: 科目代碼(code)、科目名稱(name_c/name_e)、會計準則版本(version)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -712,7 +731,9 @@ class TEJIFRSAccountDescriptions(TEJBaseAdapter):
 class TEJFinancialCoverCumulative(TEJBaseAdapter):
     name = "tej.financial_cover_cumulative"
     version = "v1"
-    description = "查詢 IFRS 合併累計報表封面資料"
+    description = """查詢 IFRS 合併累計財報封面資訊 (TRAIL/TAIM1AA)
+    主要欄位: 公司代碼(coid)、財報年月(mdate)、簽證會計師(auditor)、
+    核閱/查核報告類型(report_type)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -762,7 +783,9 @@ class TEJFinancialSummaryQuarterly(TEJBaseAdapter):
 class TEJFinancialCoverQuarterly(TEJBaseAdapter):
     name = "tej.financial_cover_quarterly"
     version = "v1"
-    description = "查詢 IFRS 合併單季報表封面資料"
+    description = """查詢 IFRS 合併單季財報封面資訊 (TRAIL/TAIM1AQA)
+    主要欄位: 公司代碼(coid)、財報年月(mdate)、簽證會計師(auditor)、
+    核閱/查核報告類型(report_type)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -809,7 +832,9 @@ class TEJFuturesData(TEJBaseAdapter):
 class TEJOptionsBasicInfo(TEJBaseAdapter):
     name = "tej.options_basic_info"
     version = "v1"
-    description = "查詢選擇權基本資料"
+    description = """查詢選擇權契約基本資料 (TRAIL/TAOPBAS)
+    主要欄位: 契約代碼(coid)、標的物(underlying)、履約價(strike_price)、
+    到期日(delivery_date)、買賣權別(call_put_type)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -829,7 +854,9 @@ class TEJOptionsBasicInfo(TEJBaseAdapter):
 class TEJOptionsDailyTrading(TEJBaseAdapter):
     name = "tej.options_daily_trading"
     version = "v1"
-    description = "查詢選擇權日交易狀況"
+    description = """查詢選擇權每日交易行情 (TRAIL/TAOPTION)
+    主要欄位: 年月日(mdate)、契約代碼(coid)、開盤(open)、最高(high)、
+    最低(low)、收盤(close)、成交量(volume)、未平倉量(oi)、結算價(settlement_price)等"""
 
     @property
     def schema(self) -> Dict[str, Any]:

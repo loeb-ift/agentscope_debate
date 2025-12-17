@@ -3,6 +3,19 @@ from sqlalchemy.sql import func
 from api.database import Base
 
 class Company(Base):
+    """
+    公司實體 (Company Entity)。
+    
+    **使用時機 (When to use):**
+    - 當需要儲存或查詢公司的基本資料 (如統編、成立日期、產業分類) 時。
+    - 當需要建立公司與其他實體 (如子公司、發行證券) 的關聯時。
+    - 用於 `internal.search_company` 或 `internal.get_company_details` 工具的後端資料源。
+    
+    **使用方式 (How to use):**
+    - `company_id` 是唯一識別碼，通常使用股票代碼 (Ticker) 或 TEJ ID。
+    - 透過 `industry_sector` 與 `industry_group` 進行產業鏈分析。
+    - 關聯 `Security` 表以查詢該公司發行的股票或債券。
+    """
     __tablename__ = 'companies'
 
     company_id = Column(String(50), primary_key=True)
@@ -86,6 +99,19 @@ class Company(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class Security(Base):
+    """
+    證券實體 (Security Entity)。
+    
+    **使用時機 (When to use):**
+    - 當需要區分同一家公司發行的不同金融商品 (如普通股、特別股、公司債) 時。
+    - 儲存具體的交易代碼 (Ticker)、ISIN 碼與交易所資訊。
+    - 用於 `internal.get_security_details` 工具，提供精確的證券規格。
+    
+    **使用方式 (How to use):**
+    - 透過 `issuer_company_id` 連結回發行公司 (`Company`)。
+    - `security_type` 區分商品類型 (Stock, Bond, ETF)。
+    - `primary_exchange` 指定主要交易場所。
+    """
     __tablename__ = 'securities'
 
     security_id = Column(String(50), primary_key=True)
@@ -125,6 +151,13 @@ class Security(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class FinancialInstitution(Base):
+    """
+    金融機構實體 (Financial Institution)。
+    
+    **使用時機:**
+    - 當需要標識銀行、券商、保險公司等特殊金融法人時。
+    - 用於儲存 SWIFT Code 或 LEI Code 等金融專用識別碼。
+    """
     __tablename__ = 'financial_institutions'
     
     institution_id = Column(String(50), primary_key=True)
@@ -138,6 +171,13 @@ class FinancialInstitution(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class Exchange(Base):
+    """
+    交易所實體 (Exchange)。
+    
+    **使用時機:**
+    - 定義交易場所 (如 TWSE, TPEx, NYSE)。
+    - 用於正規化市場代碼，確保跨國交易資料的一致性。
+    """
     __tablename__ = 'exchanges'
     
     exchange_id = Column(String(50), primary_key=True)
@@ -151,6 +191,13 @@ class Exchange(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class KeyPersonnel(Base):
+    """
+    關鍵人員實體 (Key Personnel)。
+    
+    **使用時機:**
+    - 儲存公司董監事、經理人 (CEO, CFO) 等重要人物資訊。
+    - 分析「人」與「公司」的關聯 (如董事長兼任情形)。
+    """
     __tablename__ = 'key_personnel'
     
     person_id = Column(String(50), primary_key=True)
@@ -164,6 +211,20 @@ class KeyPersonnel(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class FinancialTerm(Base):
+    """
+    金融術語實體 (Financial Term)。
+    
+    **使用時機 (Use Cases):**
+    1. **消除歧義 (Disambiguation)**: 當辯論雙方對某個指標 (例如 "Free Cash Flow") 的計算方式有分歧時。
+    2. **知識增強 (Knowledge Augmentation)**: 初階 Agent (如 Junior Analyst) 遇到不熟悉的財經術語時，查詢標準定義。
+    3. **報告標準化 (Standardization)**: 在生成最終投資報告時，確保使用的術語符合機構內部標準 (如 IFRS 定義)。
+
+    **使用流程範例 (Example Workflow):**
+    1. **觸發**: 辯論中，反方質疑正方的 "EBITDA" 計算未包含租賃費用。
+    2. **查詢**: 正方 Agent 調用 `internal.term.lookup(q="EBITDA")`。
+    3. **檢索**: 系統從此表 (`financial_terms`) 檢索標準定義、公式 (Formula) 與備註 (Notes)。
+    4. **應用**: Agent 引用檢索到的官方公式回應質疑，確保論點基於共同認知的標準。
+    """
     __tablename__ = 'financial_terms'
     
     term_id = Column(String(50), primary_key=True)
@@ -176,6 +237,13 @@ class FinancialTerm(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class CorporateRelationship(Base):
+    """
+    企業關聯實體 (Corporate Relationship)。
+    
+    **使用時機:**
+    - 定義公司間的非層級關係 (如供應商、客戶、策略合作夥伴)。
+    - 補足 `Company` 表中層級關係 (Parent/Subsidiary) 以外的商業網絡。
+    """
     __tablename__ = 'corporate_relationships'
     
     relationship_id = Column(String(50), primary_key=True)

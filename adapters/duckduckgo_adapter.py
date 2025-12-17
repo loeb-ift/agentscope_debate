@@ -1,6 +1,7 @@
 from .tool_adapter import ToolAdapter
 from typing import Dict, Any
-from duckduckgo_search import DDGS
+# Deprecated: shim to searxng.search with engines='duckduckgo'
+from adapters.searxng_adapter import SearXNGAdapter
 
 class DuckDuckGoAdapter(ToolAdapter):
     """
@@ -16,7 +17,7 @@ class DuckDuckGoAdapter(ToolAdapter):
 
     @property
     def description(self) -> str:
-        return "使用 DuckDuckGo 進行網頁搜尋"
+        return "DuckDuckGo 隱私搜尋引擎 (相容模式)。提供基本的網頁搜尋功能，不追蹤使用者。"
 
     @property
     def cache_ttl(self) -> int:
@@ -33,7 +34,7 @@ class DuckDuckGoAdapter(ToolAdapter):
                     "minimum": 1,
                     "maximum": 20,
                     "default": 10,
-                    "description": "回傳結果數量"
+                    "description": "回傳結果數量上限"
                 }
             },
             "required": ["q"]
@@ -48,29 +49,13 @@ class DuckDuckGoAdapter(ToolAdapter):
         }
 
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
+        """
+        Deprecated shim: route to searxng.search with engines='duckduckgo'.
+        保留 duckduckgo.search 名稱，內部統一走 searxng 以降低維護成本。
+        """
         q = kwargs.get("q")
         max_results = kwargs.get("max_results", 10)
-
-        try:
-            with DDGS() as ddgs:
-                raw_results = [r for r in ddgs.text(q, max_results=max_results)]
-            
-            # 標準化數據
-            normalized_data = []
-            for item in raw_results:
-                normalized_data.append({
-                    "title": item.get("title"),
-                    "url": item.get("href"),
-                    "snippet": item.get("body"),
-                    "source": "duckduckgo"
-                })
-
-            return {
-                "data": normalized_data,
-                "raw": raw_results,
-                "cost": 0,
-                "citations": []
-            }
-
-        except Exception as e:
-            raise RuntimeError(f"DuckDuckGo Error: {e}")
+        sx = SearXNGAdapter()
+        resp = sx.invoke(q=q, limit=max_results, engines='duckduckgo')
+        # resp['data'] 已是標準化格式，保持返回結構一致
+        return resp

@@ -6,6 +6,93 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from api.config import Config
 
+class EmbeddingProvider:
+    async def get_embedding(self, text: str) -> List[float]:
+        raise NotImplementedError
+
+class OllamaEmbeddingProvider(EmbeddingProvider):
+    def __init__(self):
+        self.host = Config.OLLAMA_EMBEDDING_HOST
+        self.model = Config.OLLAMA_EMBEDDING_MODEL
+        if not self.host.startswith(("http://", "https://")):
+            self.host = f"http://{self.host}"
+
+    async def get_embedding(self, text: str) -> List[float]:
+        url = f"{self.host}/api/embeddings"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.post(url, json={"model": self.model, "prompt": text})
+                response.raise_for_status()
+                data = response.json()
+                return data["embedding"]
+            except Exception as e:
+                print(f"Error fetching embedding from Ollama: {e}")
+                return []
+
+class AzureEmbeddingProvider(EmbeddingProvider):
+    def __init__(self):
+        self.endpoint = Config.AZURE_OPENAI_ENDPOINT
+        self.api_key = Config.AZURE_OPENAI_API_KEY
+        self.deployment = getattr(Config, "AZURE_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
+        self.api_version = getattr(Config, "AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+        
+    def _get_url(self):
+        base = self.endpoint.rstrip('/')
+        return f"{base}/openai/deployments/{self.deployment}/embeddings?api-version={self.api_version}"
+
+    async def get_embedding(self, text: str) -> List[float]:
+        url = self._get_url()
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": self.api_key
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.post(url, json={"input": text}, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                return data["data"][0]["embedding"]
+            except Exception as e:
+                print(f"Error fetching embedding from Azure: {e}")
+                return []
+
+class OpenAIEmbeddingProvider(EmbeddingProvider):
+    def __init__(self):
+        self.base_url = getattr(Config, "OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.api_key = getattr(Config, "OPENAI_API_KEY", "")
+        self.model = getattr(Config, "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    async def get_embedding(self, text: str) -> List[float]:
+        url = f"{self.base_url.rstrip('/')}/embeddings"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.post(url, json={"input": text, "model": self.model}, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                return data["data"][0]["embedding"]
+            except Exception as e:
+                print(f"Error fetching embedding from OpenAI: {e}")
+                return []
+
+def get_embedding_provider() -> EmbeddingProvider:
+    # Use EMBEDDING_PROVIDER if set, otherwise fallback to LLM_PROVIDER
+    # This ensures sync if user wants, but flexibility if set explicitly.
+    provider_name = getattr(Config, "EMBEDDING_PROVIDER", "").lower()
+    
+    if not provider_name:
+         provider_name = getattr(Config, "LLM_PROVIDER", "ollama").lower()
+         
+    if provider_name == "azure_openai":
+        return AzureEmbeddingProvider()
+    elif provider_name == "openai":
+        return OpenAIEmbeddingProvider()
+    else:
+        return OllamaEmbeddingProvider()
+
 class VectorStore:
     _client = None
     
@@ -30,22 +117,8 @@ class VectorStore:
 
     @staticmethod
     async def get_embedding(text: str) -> List[float]:
-        """Get embedding from Ollama (using dedicated embedding host)"""
-        ollama_host = Config.OLLAMA_EMBEDDING_HOST
-        model = Config.OLLAMA_EMBEDDING_MODEL
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                response = await client.post(
-                    f"{ollama_host}/api/embeddings",
-                    json={"model": model, "prompt": text}
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["embedding"]
-            except Exception as e:
-                print(f"Error fetching embedding from {ollama_host}/api/embeddings: {e}")
-                return []
+        provider = get_embedding_provider()
+        return await provider.get_embedding(text)
 
     @classmethod
     async def add_texts(cls, collection_name: str, texts: List[str], metadatas: List[Dict[str, Any]]):
@@ -101,16 +174,11 @@ class VectorStore:
             must_clauses = []
             
             for key, value in filter_conditions.items():
-                # Range Filter (e.g. timestamp)
                 if isinstance(value, dict) and any(k in value for k in ['gt', 'gte', 'lt', 'lte']):
                     must_clauses.append(qmodels.FieldCondition(key=key, range=qmodels.Range(**value)))
-                
-                # List Match (Match Any)
                 elif isinstance(value, list):
                     for v in value:
                         should_clauses.append(qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=v)))
-                
-                # Exact Match
                 else:
                     must_clauses.append(qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value)))
             
@@ -120,8 +188,6 @@ class VectorStore:
         # 3. Search (using query_points)
         client = cls.get_client()
         try:
-            # Note: query_points is supported in newer qdrant-client versions
-            # It replaces search/scroll/recommend with a unified API.
             results = client.query_points(
                 collection_name=collection_name,
                 query=query_vector,
@@ -135,15 +201,10 @@ class VectorStore:
 
     @classmethod
     async def delete_by_filter(cls, collection_name: str, filter_conditions: Dict[str, Any]):
-        """
-        Delete points matching the filter conditions.
-        """
         if not filter_conditions:
             return
 
         client = cls.get_client()
-        
-        # Construct Filter
         must_clauses = []
         for key, value in filter_conditions.items():
             must_clauses.append(qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value)))

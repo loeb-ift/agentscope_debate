@@ -16,15 +16,12 @@ from api.config import Config
 PROMPTS_AGENTS_DIR = "prompts/agents"
 
 def initialize_financial_terms(db: Session):
-    """初始化金融術語對照表（從內建資料與 JSON 種子檔）"""
+    """初始化金融術語對照表（從內建資料與 JSON 種子檔），支持增量更新"""
     print("Initializing financial terms...")
 
-    # 若表已有資料，略過（避免重複種子）
-    if db.query(financial_models.FinancialTerm).first():
-        print("Financial terms already exist, skipping initialization.")
-        return
-
-    terms_to_create = []
+    # Load existing terms into a dictionary for quick lookup
+    existing_terms = {t.term_id: t for t in db.query(financial_models.FinancialTerm).all()}
+    terms_to_save = []
 
     # 1) 先載入 data/seeds/financial_terms.zh-TW.json（若存在）
     seed_path = os.path.join("data", "seeds", "financial_terms.zh-TW.json")
@@ -47,48 +44,74 @@ def initialize_financial_terms(db: Session):
                     }
                     if not term_id:
                         term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
-                    terms_to_create.append(financial_models.FinancialTerm(
-                        term_id=term_id,
-                        term_name=zh_name,
-                        term_category=category,
-                        definition=definition,
-                        meta=meta
-                    ))
+                    
+                    if term_id in existing_terms:
+                        # Update existing term
+                        existing_term = existing_terms[term_id]
+                        existing_term.term_name = zh_name
+                        existing_term.term_category = category
+                        existing_term.definition = definition
+                        existing_term.meta = meta
+                        terms_to_save.append(existing_term)
+                    else:
+                        # Create new term
+                        new_term = financial_models.FinancialTerm(
+                            term_id=term_id,
+                            term_name=zh_name,
+                            term_category=category,
+                            definition=definition,
+                            meta=meta
+                        )
+                        terms_to_save.append(new_term)
+                        existing_terms[term_id] = new_term # Add to tracking map
         except Exception as e:
             print(f"Warning: failed to load seed financial terms from JSON: {e}")
 
     # 2) 再補充 api/financial_terms_data.py 內建資料（避免與上面重複）
-    existing_ids = {t.term_id for t in terms_to_create}
     for item in FINANCIAL_TERMS_DATA:
+        term_id = None
+        zh_name = None
+        category = None
+        definition = None
+        meta = None
+        
         if isinstance(item, tuple):
             zh_name, en_name, category = item
             term_id = f"{category}_{en_name}".lower().replace(" ", "_").replace(",", "").replace(".", "").replace("&", "and")[:50]
             definition = en_name
-            meta = None
         elif isinstance(item, dict):
             term_id = item.get("id")
             zh_name = item.get("name")
             category = item.get("category")
             definition = item.get("definition")
-            meta = None
             if not term_id:
                 term_id = f"{category}_{zh_name}".lower().replace(" ", "_")[:50]
-        if term_id in existing_ids:
-            continue
-        terms_to_create.append(financial_models.FinancialTerm(
-            term_id=term_id,
-            term_name=zh_name,
-            term_category=category,
-            definition=definition,
-            meta=meta
-        ))
+        
+        # Only add if not already covered by JSON seed (or previous existing check)
+        # Note: In a real merge scenario, we might want code to override DB, but let's assume JSON seed > Code > DB
+        if term_id and term_id not in existing_terms:
+             new_term = financial_models.FinancialTerm(
+                term_id=term_id,
+                term_name=zh_name,
+                term_category=category,
+                definition=definition,
+                meta=meta
+            )
+             terms_to_save.append(new_term)
+             existing_terms[term_id] = new_term
 
     # 寫入 DB
     try:
-        if terms_to_create:
-            db.bulk_save_objects(terms_to_create)
+        if terms_to_save:
+            # For new items, we can use bulk_save_objects, but for updates on attached objects, session.commit handles it.
+            # However, since we mixed new and existing attached objects, plain commit should work if they are attached.
+            # For detached objects (if any), merge would be needed.
+            # Since we fetched existing_terms from this session, they are attached. New ones are transient.
+            # We add new ones to session.
+            for t in terms_to_save:
+                db.add(t) 
             db.commit()
-        print(f"Initialized {len(terms_to_create)} financial terms.")
+        print(f"Initialized/Updated {len(terms_to_save)} financial terms.")
     except Exception as e:
         print(f"Error initializing financial terms: {e}")
         db.rollback()
@@ -99,12 +122,22 @@ def initialize_toolsets(db: Session):
     
     # 1. Global Standard ToolSet (Search + Yahoo Finance + Internal DB Search)
     global_tools = [
-        "searxng.search", 
-        "duckduckgo.search", 
+        "searxng.search",
+        "duckduckgo.search",
         "yfinance.stock_info",
         "internal.search_company", # Add Internal DB tools to global
         "internal.get_company_details",
-        "internal.get_security_details"
+        "internal.get_security_details",
+        # ChinaTimes Suite (if enabled in env, but safe to list here as registry handles availability)
+        "news.search_chinatimes",
+        "chinatimes.stock_rt",
+        "chinatimes.stock_news",
+        "chinatimes.stock_kline",
+        # New ChinaTimes Tools
+        "chinatimes.market_index",
+        "chinatimes.market_rankings",
+        "chinatimes.sector_info",
+        "chinatimes.stock_fundamental"
     ]
     
     global_ts = db.query(models.ToolSet).filter(models.ToolSet.is_global == True).first()
@@ -128,29 +161,34 @@ def initialize_toolsets(db: Session):
     # 2. Role-Specific ToolSets
     role_toolsets_config = {
         "Quantitative ToolSet": {
-            "desc": "量化分析專用：股價、期貨、選擇權",
-            "tools": ["tej.stock_price", "tej.futures_data", "tej.options_daily_trading", "tej.financial_cover_cumulative"],
-            "target_roles": ["Quantitative Analyst"] 
+            "desc": "量化分析工具集：專注於價格數據、期貨選擇權與即時市場動能，支援量化模型運算。",
+            "tools": ["tej.stock_price", "tej.futures_data", "tej.options_daily_trading", "tej.financial_cover_cumulative", "chinatimes.market_rankings", "chinatimes.financial_ratios"],
+            "target_roles": ["量化分析師"]
         },
         "Valuation ToolSet": {
-            "desc": "估值建模專用：財報、股利、IFRS",
-            "tools": ["tej.financial_summary", "tej.financial_summary_quarterly", "tej.shareholder_meeting", "tej.stock_price", "tej.ifrs_account_descriptions"],
-            "target_roles": ["Valuation Expert"]
+            "desc": "估值建模工具集：專注於財報細節、股利政策與會計準則，支援 DCF/PE/PB 估值模型。",
+            "tools": ["tej.financial_summary", "tej.financial_summary_quarterly", "tej.shareholder_meeting", "tej.stock_price", "tej.ifrs_account_descriptions", "chinatimes.stock_fundamental", "chinatimes.balance_sheet", "chinatimes.income_statement", "chinatimes.cash_flow"],
+            "target_roles": ["價值投資人"]
         },
         "Industry ToolSet": {
-            "desc": "產業研究專用：營收、競爭者比較",
-            "tools": ["tej.monthly_revenue", "tej.company_info", "tej.financial_summary", "tej.offshore_fund_holdings_industry"],
-            "target_roles": ["Industry Researcher"]
+            "desc": "產業研究工具集：專注於月營收變化、公司基本資料與競爭者比較，支援產業鏈分析。",
+            "tools": ["tej.monthly_revenue", "tej.company_info", "tej.financial_summary", "tej.offshore_fund_holdings_industry", "chinatimes.sector_info", "chinatimes.stock_fundamental"],
+            "target_roles": ["產業研究員"]
         },
         "Risk ToolSet": {
-            "desc": "風控合規專用：籌碼、融資券、外資",
+            "desc": "風控合規工具集：專注於籌碼分佈、融資券變化與外資動向，支援風險預警與合規檢查。",
             "tools": ["tej.institutional_holdings", "tej.margin_trading", "tej.foreign_holdings", "tej.offshore_fund_suspension"],
-            "target_roles": ["Risk & Compliance Officer"]
+            "target_roles": ["風控官", "挑戰者"]
         },
         "Strategic ToolSet": {
-            "desc": "首席/策略專用：公司基本面概覽",
-            "tools": ["tej.company_info", "tej.financial_summary"],
-            "target_roles": ["Chief Analyst", "Report Editor"]
+            "desc": "策略規劃工具集：專注於市場宏觀趨勢、大盤指數與公司概況，支援高階策略制定。",
+            "tools": ["tej.company_info", "tej.financial_summary", "chinatimes.stock_fundamental", "chinatimes.market_index", "chinatimes.sector_info", "internal.get_industry_tree", "internal.get_key_personnel", "internal.get_corporate_relationships"],
+            "target_roles": ["首席分析師", "報告主筆", "宏觀策略師"]
+        },
+        "Growth ToolSet": {
+            "desc": "成長動能工具集：專注於市場熱點、排行與類股輪動，支援尋找高成長標的。",
+            "tools": ["chinatimes.market_rankings", "chinatimes.sector_info"],
+            "target_roles": ["成長策略師", "市場交易員"]
         }
     }
 
@@ -166,6 +204,27 @@ def initialize_toolsets(db: Session):
             db.add(toolset)
             db.commit()
             db.refresh(toolset)
+        else:
+            # Update existing toolset definition (Tools & Description)
+            current_tools = set(toolset.tool_names)
+            new_tools = set(ts_config["tools"])
+            
+            updated = False
+            # Check for tool updates
+            if not new_tools.issubset(current_tools):
+                print(f"Updating tools for toolset: {ts_name}")
+                toolset.tool_names = list(current_tools | new_tools)
+                updated = True
+                
+            # Check for description updates
+            if toolset.description != ts_config["desc"]:
+                print(f"Updating description for toolset: {ts_name}")
+                toolset.description = ts_config["desc"]
+                updated = True
+                
+            if updated:
+                db.commit()
+                db.refresh(toolset)
         
         # Assign to matching agents
         for target_role in ts_config["target_roles"]:
@@ -220,9 +279,10 @@ def initialize_internal_tools(db: Session):
     db.commit()
 
 def initialize_default_agents(db: Session):
-    """初始化預設 Agent，如果資料庫為空，則從 YAML 文件加載"""
-    if db.query(models.Agent).first():
-        return
+    """初始化預設 Agent，從 YAML 文件加載 (支持更新)"""
+    # Removed early return to allow updates/additions
+    # if db.query(models.Agent).first():
+    #    return
 
     print("Initializing default agents from files...")
     
@@ -274,29 +334,39 @@ def initialize_default_agents(db: Session):
             db.rollback()
 
 def initialize_default_teams(db: Session):
-    """初始化4個預設辯論團隊 (Teams)"""
+    """初始化3個極具特色的辯論團隊 (Teams)"""
     print("Initializing default teams...")
 
     teams_config = [
         {
-            "name": "Growth Team",
-            "description": "專注於高成長與創新科技 (Members: Growth_Strategist, Innovation_Believer)",
-            "members": ["Growth_Strategist", "Innovation_Believer"]
+            "name": "價值護城河 (Value Moat)",
+            "description": "穩健防守，專注基本面與風險控制。成員：價值投資人、風控官、產業研究員。",
+            "members": ["價值投資人", "風控官", "產業研究員"]
         },
         {
-            "name": "Value Team",
-            "description": "專注於基本面與風險控制 (Members: Value_Investor, Risk_Manager)",
-            "members": ["Value_Investor", "Risk_Manager"]
+            "name": "趨勢捕手 (Trend Hunters)",
+            "description": "激進進攻，捕捉成長動能與宏觀機會。成員：成長策略師、市場交易員、宏觀策略師。",
+            "members": ["成長策略師", "市場交易員", "宏觀策略師"]
         },
         {
-            "name": "Macro Team",
-            "description": "專注於宏觀經濟與政策分析 (Members: Macro_Economist, Policy_Analyst)",
-            "members": ["Macro_Economist", "Policy_Analyst"]
+            "name": "數據決策 (Data Driven)",
+            "description": "量化為王，以數據與邏輯戰勝直覺。成員：量化分析師、首席分析師、挑戰者。",
+            "members": ["量化分析師", "首席分析師", "挑戰者"]
         },
         {
-            "name": "Technical Team",
-            "description": "專注於技術分析與市場動能 (Members: Technical_Analyst, Market_Trader)",
-            "members": ["Technical_Analyst", "Market_Trader"]
+            "name": "逆向操作 (Contrarian Squad)",
+            "description": "人棄我取，在危機中尋找被錯殺的機會。成員：挑戰者、價值投資人、宏觀策略師。",
+            "members": ["挑戰者", "價值投資人", "宏觀策略師"]
+        },
+        {
+            "name": "產業深潛 (Industry Deep Dive)",
+            "description": "專注供應鏈細節與技術迭代，尋找結構性贏家。成員：產業研究員、成長策略師、量化分析師。",
+            "members": ["產業研究員", "成長策略師", "量化分析師"]
+        },
+        {
+            "name": "波動率套利 (Volatility Arbitrage)",
+            "description": "利用市場恐慌與情緒波動獲利。成員：市場交易員、風控官、量化分析師。",
+            "members": ["市場交易員", "風控官", "量化分析師"]
         }
     ]
 

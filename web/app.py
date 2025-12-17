@@ -223,14 +223,14 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         neutral_agents = get_team_members(neutral_team_id) if neutral_team_id else []
 
         if not pro_agents or not con_agents:
-            return "錯誤: 必須選擇正方與反方團隊，且團隊必須包含成員。", None
+            return "錯誤: 必須選擇正方與反方團隊，且團隊必須包含成員。", None, "⚠️ 參數錯誤"
 
         teams = [
             {"name": "正方", "side": "pro", "agent_ids": pro_agents},
             {"name": "反方", "side": "con", "agent_ids": con_agents}
         ]
         if neutral_agents:
-             teams.append({"name": "中立/第三方", "side": "neutral", "agent_ids": neutral_agents})
+            teams.append({"name": "中立/第三方", "side": "neutral", "agent_ids": neutral_agents})
         
         config_payload = {
             "topic": topic,
@@ -241,7 +241,12 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         }
         
         print(f"DEBUG: Creating config...", flush=True)
+        print(f"DEBUG: Payload: {json.dumps(config_payload, ensure_ascii=False)}", flush=True)
         config_res = requests.post(f"{API_URL}/debates/config", json=config_payload)
+        
+        if config_res.status_code != 201:
+            print(f"ERROR: Create Config Failed. Status: {config_res.status_code}, Response: {config_res.text}", flush=True)
+            
         config_res.raise_for_status()
         config_id = config_res.json()["id"]
         print(f"DEBUG: Config created ID: {config_id}. Launching...", flush=True)
@@ -267,8 +272,11 @@ def stream_debate_log(task_id):
         yield "", "🚀 連接辯論串流..."
 
         # Use requests with stream=True for robust SSE handling
+        print(f"[DEBUG STREAM] Connecting to {API_URL}/debates/{task_id}/stream", flush=True)
         with requests.get(f"{API_URL}/debates/{task_id}/stream", stream=True) as response:
-            history_md = ""
+            history_list = [] # Store individual entries
+            MAX_DISPLAY_ITEMS = 30
+            
             for line in response.iter_lines():
                 if line:
                     decoded_line = line.decode('utf-8')
@@ -276,10 +284,15 @@ def stream_debate_log(task_id):
                         json_str = decoded_line[6:] # Removing "data: " prefix
                         # print(f"DEBUG STREAM: {json_str[:100]}...", flush=True)
                         if json_str.strip() == "[DONE]":
-                            yield history_md, "🏁 辯論已圓滿結束。"
+                            display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
+                            if len(history_list) > MAX_DISPLAY_ITEMS:
+                                display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
+                            yield display_md, "🏁 辯論已圓滿結束。"
                             break
                         try:
                             data = json.loads(json_str)
+                            # Debug log for stream data
+                            # print(f"[DEBUG STREAM] Received data type: {data.get('type')} content len: {len(data.get('content', ''))}", flush=True)
                             
                             # Handle Score Update Event
                             if data.get("type") == "score_update":
@@ -293,10 +306,16 @@ def stream_debate_log(task_id):
                                 score_msg = f"**{icon} 評分更新**：【{side}】 {delta_str} 分 (當前: {new_score})\n> 原因：{reason}"
                                 
                                 entry = f"\n\n### {icon} System (Score)\n{score_msg}\n\n---"
-                                history_md += entry
-                                yield history_md, f"⚖️ 評分更新: {side} {delta_str}"
+                                history_list.append(entry)
+                                
+                                # Render
+                                display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
+                                if len(history_list) > MAX_DISPLAY_ITEMS:
+                                    display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
+                                    
+                                yield display_md, f"⚖️ 評分更新: {side} {delta_str}"
                                 continue
-
+                            
                             role = data.get("role", "System")
                             content = data.get("content", "")
                             
@@ -326,13 +345,25 @@ def stream_debate_log(task_id):
                             elif "System" in role:
                                 icon = "🖥️"
                             
-                            entry = f"\n\n### {icon} {role}\n{content}\n\n---"
-                            history_md += entry
                             
-                            yield history_md, status_msg
+                            entry = f"\n\n### {icon} {role}\n{content}\n\n---"
+                            history_list.append(entry)
+                            
+                            # Debug log before yield
+                            # print(f"[DEBUG STREAM] Yielding update. MD Len: {len(history_md)}, Status: {status_msg}", flush=True)
+                            
+                            # Render window
+                            display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
+                            if len(history_list) > MAX_DISPLAY_ITEMS:
+                                display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
+
+                            yield display_md, status_msg
                         except json.JSONDecodeError:
                             pass
+                        except Exception as inner_e:
+                            print(f"[DEBUG STREAM] Inner Loop Error: {inner_e}", flush=True)
     except Exception as e:
+        print(f"[DEBUG STREAM] Outer Error: {e}", flush=True)
         yield f"**Error connecting to stream:** {str(e)}", f"❌ 連線錯誤: {str(e)}"
 
 def list_prompts():
@@ -370,7 +401,7 @@ def update_prompt_content(key, content):
     except Exception as e:
         return f"Error: {e}"
 
-def create_custom_tool(name, tool_type, url, method, headers_json, python_code, schema_json, group):
+def create_custom_tool(name, tool_type, url, method, headers_json, python_code, schema_json, group, mcp_api_key=None):
     try:
         schema = json.loads(schema_json) if schema_json else {}
         
@@ -389,6 +420,14 @@ def create_custom_tool(name, tool_type, url, method, headers_json, python_code, 
                 "method": method,
                 "headers": headers
             }
+        elif tool_type == "mcp":
+             # [MCP Integration]
+             # For MCP, we need the base URL and optionally an API Key.
+             # We store api_key in api_config for simplicity (though header injection is better).
+             payload["api_config"] = {
+                 "url": url,
+                 "api_key": mcp_api_key
+             }
         elif tool_type == "python":
             payload["python_code"] = python_code
         
@@ -619,8 +658,9 @@ def get_all_tool_names():
         response = requests.get(f"{API_URL}/registry/tools")
         response.raise_for_status()
         tools = response.json()
-        return list(tools.keys())
-    except:
+        return sorted(list(tools.keys()))
+    except Exception as e:
+        print(f"Error fetching all tool names: {e}")
         return []
 
 def get_all_prompt_keys():
@@ -687,6 +727,43 @@ def get_system_config():
 def get_config_keys():
     config = get_system_config()
     return list(config.keys()) if config else []
+
+def get_llm_info():
+    """獲取當前 LLM 與 Embedding 設定，回傳 (標題, 詳細資訊)"""
+    try:
+        config = get_system_config()
+        if not config: return "# 🤖 AI 辯論平台管理系統 (Unknown)", "Unknown"
+        
+        # Helper to find value by key (list of dicts)
+        def get_val(key):
+            for item in config:
+                if item['key'] == key:
+                    return item['value']
+            return "N/A"
+
+        provider = get_val("LLM_PROVIDER")
+        llm_model = "N/A"
+        
+        env_label = "Local"
+        if provider == "ollama":
+            llm_model = get_val("OLLAMA_MODEL")
+            env_label = "Local (Ollama)"
+        elif provider == "azure_openai":
+            llm_model = get_val("AZURE_OPENAI_MODEL_DEPLOYMENT")
+            env_label = "Azure"
+        elif provider == "openai":
+            llm_model = get_val("OPENAI_MODEL")
+            env_label = "OpenAI"
+            
+        emb_provider = get_val("EMBEDDING_PROVIDER")
+        if not emb_provider or emb_provider == "N/A":
+             emb_provider = provider # Fallback logic
+        
+        title = f"# 🤖 AI 辯論平台管理系統 ({env_label})"
+        details = f"🧠 LLM: {provider.upper()} ({llm_model}) | 📚 Embedding: {emb_provider.upper()}"
+        return title, details
+    except Exception as e:
+        return "# 🤖 AI 辯論平台管理系統 (Error)", f"Error: {e}"
 
 def get_industry_tree_data():
     try:
@@ -815,8 +892,12 @@ def get_team_choices():
 
 def main():
     with gr.Blocks(title="AI 辯論平台") as demo:
-        gr.Markdown("# 🤖 AI 辯論平台管理系統")
+        with gr.Row():
+            title_md = gr.Markdown("# 🤖 AI 辯論平台管理系統 (Loading...)")
+            llm_status = gr.Markdown(value="", elem_id="llm_status")
         
+        demo.load(get_llm_info, outputs=[title_md, llm_status])
+
         with gr.Tabs():
             # ==============================
             # Tab 1: 🏛️ 辯論大廳 (Debate Hall)
@@ -983,13 +1064,13 @@ def main():
                             )
 
                         step1_next_btn.click(
-                            force_refresh_dropdowns,
-                            outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
-                            show_progress=True
-                        ).then(
                             go_to_step2,
                             inputs=[topic_input],
                             outputs=[step1_group, step2_group, step3_group]
+                        ).then(
+                            force_refresh_dropdowns,
+                            outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
+                            show_progress=True
                         )
                         step2_back_btn.click(go_to_step1, outputs=[step1_group, step2_group, step3_group])
                         step2_next_btn.click(
@@ -1333,10 +1414,24 @@ def main():
                         def get_tools_df():
                             try:
                                 res = requests.get(f"{API_URL}/registry/tools")
+                                res.raise_for_status()
                                 data = res.json()
-                                return pd.DataFrame.from_dict(data, orient='index')
-                            except:
-                                return pd.DataFrame()
+                                if not data:
+                                    return pd.DataFrame(columns=["Name", "Description", "Group", "Version"])
+                                
+                                # Process dict into list for better DataFrame control
+                                rows = []
+                                for name, info in data.items():
+                                    rows.append({
+                                        "Name": name,
+                                        "Description": info.get("description", ""),
+                                        "Group": info.get("group", ""),
+                                        "Version": info.get("version", "")
+                                    })
+                                return pd.DataFrame(rows)
+                            except Exception as e:
+                                print(f"Error fetching tools df: {e}")
+                                return pd.DataFrame(columns=["Error"], data=[[str(e)]])
                         
                         tools_df = gr.DataFrame()
                         refresh_tools_btn = gr.Button("刷新工具")
@@ -1348,10 +1443,11 @@ def main():
                         tool_id_state = gr.State(value=None)
                         
                         with gr.Row():
-                            select_tool_dropdown = gr.Dropdown(label="選擇要編輯的工具", choices=[], scale=2, allow_custom_value=True)
+                            select_tool_dropdown = gr.Dropdown(label="選擇要編輯的工具 (僅限自定義工具)", choices=[], scale=2, allow_custom_value=True)
                             refresh_tool_select_btn = gr.Button("🔄 刷新", scale=0)
                             load_tool_btn = gr.Button("📂 載入設定", scale=1)
                         
+                        gr.Markdown("*注意：ChinaTimes、TEJ 等系統內建工具無法在此編輯，僅能編輯透過本介面創建的工具。*")
                         gr.Markdown("---")
                         
                         with gr.Row():
@@ -1431,15 +1527,20 @@ def main():
                         with gr.Row():
                             with gr.Column(scale=1):
                                 gr.Markdown("### 新增自定義工具")
-                                tool_name = gr.Textbox(label="工具名稱", placeholder="e.g., my_tool")
-                                tool_type = gr.Dropdown(choices=["http", "python"], label="工具類型", value="http")
-                                tool_group = gr.Dropdown(choices=["user_defined", "browser_use", "financial_data", "data_analysis"], label="工具組", value="user_defined", allow_custom_value=True)
-                                tool_schema = gr.Code(label="參數 Schema (JSON Schema)", language="json", value='{"type": "object", "properties": {"q": {"type": "string"}}}')
+                                tool_name = gr.Textbox(label="工具名稱", placeholder="e.g., my_tool (for MCP, this will be the prefix)")
+                                tool_type = gr.Dropdown(choices=["http", "python", "mcp"], label="工具類型", value="http")
+                                tool_group = gr.Dropdown(choices=["user_defined", "browser_use", "financial_data", "data_analysis", "mcp"], label="工具組", value="user_defined", allow_custom_value=True)
+                                tool_schema = gr.Code(label="參數 Schema (JSON Schema) [MCP 無需填寫]", language="json", value='{"type": "object", "properties": {"q": {"type": "string"}}}')
                                 
                                 with gr.Group(visible=True) as http_config_group:
                                     tool_url = gr.Textbox(label="API URL", placeholder="https://api.example.com/data")
                                     tool_method = gr.Dropdown(choices=["GET", "POST"], label="HTTP Method", value="GET")
                                     tool_headers = gr.Code(label="Headers (JSON)", language="json", value='{}')
+
+                                with gr.Group(visible=False) as mcp_config_group:
+                                    mcp_url = gr.Textbox(label="MCP Endpoint URL", placeholder="https://mcp.alphavantage.co/mcp")
+                                    mcp_key = gr.Textbox(label="API Key (Optional)", type="password", placeholder="Paste API Key here")
+                                    gr.Markdown("ℹ️ **MCP 說明**: 註冊後，系統會自動從 Endpoint 獲取工具列表，並以 `[工具名稱].[MCP工具名]` 格式註冊多個工具。")
 
                                 with gr.Group(visible=False) as python_config_group:
                                     tool_python_code = gr.Code(label="Python Code", language="python", value='def main(arg1):\n    return f"Hello {arg1}"')
@@ -1450,7 +1551,7 @@ def main():
                                     load_tej_tpl_btn = gr.Button("📥 載入 TEJ 範例模板")
 
                                 # Try-it 區塊
-                                gr.Markdown("#### 🔬 Try it 測試 (不入庫)")
+                                gr.Markdown("#### 🔬 Try it 測試 (不入庫) [MCP 暫不支援在此預覽]")
                                 data_path = gr.Dropdown(choices=["auto", "data", "datatable.data", "items", "results"], value="auto", label="資料路徑")
                                 try_params = gr.Code(label="測試參數 Params (JSON)", language="json", value='{}')
                                 try_headers = gr.Code(label="附加 Headers (JSON)", language="json", value='{}')  # 目前僅展示，後端以 tool_headers 為主
@@ -1462,10 +1563,13 @@ def main():
                                 add_custom_tool_output = gr.Textbox(label="新增結果")
 
                                 def update_visibility(type_val):
-                                    return (gr.update(visible=(type_val=="http")),
-                                            gr.update(visible=(type_val=="python")))
+                                    return (
+                                        gr.update(visible=(type_val=="http")),
+                                        gr.update(visible=(type_val=="python")),
+                                        gr.update(visible=(type_val=="mcp"))
+                                    )
 
-                                tool_type.change(fn=update_visibility, inputs=tool_type, outputs=[http_config_group, python_config_group])
+                                tool_type.change(fn=update_visibility, inputs=tool_type, outputs=[http_config_group, python_config_group, mcp_config_group])
 
                             with gr.Column(scale=1):
                                 gr.Markdown("### 已註冊自定義工具")
@@ -1567,9 +1671,27 @@ def main():
                             show_progress=True
                         )
 
+                        def create_tool_wrapper(name, t_type, t_group, t_schema, http_url, http_method, http_headers, mcp_url_val, mcp_key_val, py_code):
+                            # Decide final URL based on type
+                            final_url = http_url
+                            if t_type == "mcp":
+                                final_url = mcp_url_val
+                            
+                            return create_custom_tool(
+                                name=name,
+                                tool_type=t_type,
+                                url=final_url,
+                                method=http_method,
+                                headers_json=http_headers,
+                                python_code=py_code,
+                                schema_json=t_schema,
+                                group=t_group,
+                                mcp_api_key=mcp_key_val
+                            )
+
                         add_custom_tool_btn.click(
-                            create_custom_tool,
-                            inputs=[tool_name, tool_type, tool_url, tool_method, tool_headers, tool_python_code, tool_schema, tool_group],
+                            create_tool_wrapper,
+                            inputs=[tool_name, tool_type, tool_group, tool_schema, tool_url, tool_method, tool_headers, mcp_url, mcp_key, tool_python_code],
                             outputs=add_custom_tool_output,
                             show_progress=True
                         ).then(list_custom_tools, outputs=custom_tools_table)

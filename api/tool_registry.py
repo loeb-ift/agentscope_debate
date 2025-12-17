@@ -10,6 +10,23 @@ from mars.types.errors import ToolRecoverableError
 from adapters.verified_price_adapter import VerifiedPriceAdapter
 from adapters.twse_adapter import TWSEStockDay
 from adapters.yahoo_adapter import YahooPriceAdapter
+from adapters.chinatimes_suite import (
+    ChinaTimesSearchAdapter,
+    ChinaTimesStockRTAdapter,
+    ChinaTimesStockNewsAdapter,
+    ChinaTimesStockKlineAdapter,
+    ChinaTimesMarketIndexAdapter,
+    ChinaTimesMarketRankingsAdapter,
+    ChinaTimesSectorAdapter,
+    ChinaTimesStockFundamentalAdapter,
+    ChinaTimesBalanceSheetAdapter,
+    ChinaTimesIncomeStatementAdapter,
+    ChinaTimesCashFlowAdapter,
+    ChinaTimesFinancialRatiosAdapter
+)
+from adapters.internal_entity_adapter import (
+    GetIndustryTree, GetKeyPersonnel, GetCorporateRelationships
+)
 from adapters.tej_adapter import (
     TEJCompanyInfo, TEJStockPrice, TEJMonthlyRevenue,
     TEJInstitutionalHoldings, TEJMarginTrading, TEJForeignHoldings,
@@ -109,6 +126,57 @@ class ToolRegistry:
             "error_mapping": getattr(tool_instance, 'error_mapping', None)
         }
         print(f"Tool '{tool_id}' registered successfully (group: {group}).")
+
+    def register_mcp_adapter(self, adapter, prefix: str = "mcp", version: str = "v1"):
+        """
+        註冊 MCP Adapter 中的所有工具。
+        Adapter 必須支援 `invoke_tool_sync` 和 `list_tools` (async or sync).
+        """
+        import asyncio
+        from adapters.mcp_wrapper_tool import DynamicMCPTool
+        
+        # 1. 獲取工具列表 (假設 list_tools 是 async，我們這裡用 run 來跑一次初始化)
+        # 如果 adapter 已經有 cache 或 list_tools 是 sync 更好。
+        # 這裡假設 adapter.list_tools() 是 async
+        try:
+             # Try sync first if available (Optimized Adapter)
+             if hasattr(adapter, "list_tools_sync"):
+                 tools = adapter.list_tools_sync()
+             else:
+                 tools = asyncio.run(adapter.list_tools())
+        except Exception as e:
+            print(f"❌ Failed to list tools from MCP adapter: {e}")
+            return
+
+        count = 0
+        for tool_meta in tools:
+            # MCP Tool Structure: {name, description, inputSchema}
+            t_name = tool_meta.get("name")
+            t_desc = tool_meta.get("description", "No description")
+            t_schema = tool_meta.get("inputSchema", {})
+            
+            # Create Wrapper
+            wrapper = DynamicMCPTool(
+                adapter=adapter,
+                tool_name=t_name,
+                tool_description=t_desc,
+                input_schema=t_schema,
+                group=prefix
+            )
+            
+            # Register with prefix (e.g., av.TIME_SERIES_DAILY or just TIME_SERIES_DAILY if unique?)
+            # Name collision risk? Let's use prefix.
+            # But standard tools are like 'tej.stock_price'.
+            # So `mcp.TIME_SERIES_DAILY` is good.
+            # Or if prefix='alphavantage', then `alphavantage.TIME_SERIES_DAILY`.
+            full_name = f"{prefix}.{t_name}"
+            # Hack: Patch name for the wrapper so describe() is correct? No, wrap does it.
+            wrapper.name = full_name # Check wrapper impl detail
+            
+            self.register(wrapper, version=version, group=prefix)
+            count += 1
+            
+        print(f"✅ Registered {count} tools from MCP Adapter ({prefix})")
 
     def _ensure_loaded(self, tool_id: str):
         """如果工具是 Lazy 的且尚未加載，則加載它。"""
@@ -432,6 +500,20 @@ tool_registry.register(VerifiedPriceAdapter(), version="v1", group="financial")
 tool_registry.register(TWSEStockDay(), version="v1", group="financial")
 tool_registry.register(YahooPriceAdapter(), version="v1", group="financial")
 
+# ChinaTimes Tools Registration
+tool_registry.register(ChinaTimesSearchAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesStockRTAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesStockNewsAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesStockKlineAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesMarketIndexAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesMarketRankingsAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesSectorAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesStockFundamentalAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesBalanceSheetAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesIncomeStatementAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesCashFlowAdapter(), version="v1", group="chinatimes")
+tool_registry.register(ChinaTimesFinancialRatiosAdapter(), version="v1", group="chinatimes")
+
 # TEJ Tools Registration
 tool_registry.register(TEJCompanyInfo(), version="v1", group="tej")
 tool_registry.register(TEJStockPrice(), version="v1", group="tej")
@@ -458,4 +540,40 @@ tool_registry.register(TEJFinancialCoverQuarterly(), version="v1", group="tej")
 tool_registry.register(TEJFuturesData(), version="v1", group="tej")
 tool_registry.register(TEJOptionsBasicInfo(), version="v1", group="tej")
 tool_registry.register(TEJOptionsDailyTrading(), version="v1", group="tej")
+
+# Register Search Tools (free tier)
+from adapters.google_cse_adapter import GoogleCSEAdapter
+from adapters.searxng_adapter import SearXNGAdapter
+from adapters.duckduckgo_adapter import DuckDuckGoAdapter
+
+tool_registry.register(SearXNGAdapter(), version="v1", group="search.free")
+# Deprecated shim kept for compatibility; internally routed to SearXNG with engines='duckduckgo'
+tool_registry.register(DuckDuckGoAdapter(), version="v1", group="search.free")
+
+# Register Search Tools (paid tier)
+tool_registry.register(GoogleCSEAdapter(), version="v1", group="search.paid")
+
+# Register Smart Search Router (U39)
+# This sits on top of search.free and search.paid
+from adapters.search_router import SearchRouter
+tool_registry.register(SearchRouter(), version="v1", group="search.smart")
+
+# Register Internal Entity Tools
+tool_registry.register(GetIndustryTree(), version="v1", group="internal")
+tool_registry.register(GetKeyPersonnel(), version="v1", group="internal")
+tool_registry.register(GetCorporateRelationships(), version="v1", group="internal")
+
+# Alpha Vantage MCP Registration (Global Tool)
+try:
+    from adapters.alpha_vantage_mcp_adapter import AlphaVantageMCPAdapter
+    import os
+    if os.getenv("ALPHA_VANTAGE_API_KEY"):
+        av_adapter = AlphaVantageMCPAdapter()
+        # Register all tools with prefix 'av' (e.g. av.TIME_SERIES_DAILY)
+        tool_registry.register_mcp_adapter(av_adapter, prefix="av")
+        print("✅ Alpha Vantage MCP Tools Registered.")
+except ImportError:
+    pass
+except Exception as e:
+    print(f"⚠️ Alpha Vantage MCP Registration Failed: {e}")
 

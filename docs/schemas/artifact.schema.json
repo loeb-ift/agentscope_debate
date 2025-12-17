@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/artifact.schema.json",
+  "title": "Debate Artifact",
+  "type": "object",
+  "required": ["id", "type", "provenance", "ts"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": { "type": "string", "enum": ["EvidenceDoc", "Claim", "Counterclaim", "ModelResult", "Summary", "VerificationTask", "Checkpoint"] },
+    "tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "citations": { "type": "array", "items": { "type": "string" } },
+    "evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "target_claim_id": { "type": "string" },
+    "inputs": { "type": "object" },
+    "outputs": { "type": "object" },
+    "params": { "type": "object" },
+    "metrics": { "type": "object" },
+    "provenance": {
+      "type": "object",
+      "required": ["agent", "tool", "run_id", "provider", "model_family"],
+      "properties": {
+        "agent": { "type": "string" },
+        "tool": { "type": "string" },
+        "plan_node_id": { "type": "string" },
+        "inputs_hash": { "type": "string" },
+        "outputs_hash": { "type": "string" },
+        "run_id": { "type": "string" },
+        "provider": { "type": "string" },
+        "model_family": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "ttl_s": { "type": "integer", "minimum": 0 },
+    "stale": { "type": "boolean" },
+    "verified": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

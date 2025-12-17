@@ -151,3 +151,59 @@ class Team(Base):
     member_ids = Column(JSON, nullable=False) # List of Agent IDs
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class EvidenceDoc(Base):
+    """
+    EvidenceDoc: The atomic unit of fact in the Evidence Lifecycle.
+    Tracks provenance, status, and verification history.
+    """
+    __tablename__ = 'evidence_docs'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    debate_id = Column(String(36), nullable=False, index=True)
+    
+    # Core Data
+    agent_id = Column(String(100), nullable=False)
+    tool_name = Column(String(100), nullable=False)
+    params = Column(JSON, nullable=False) # Normalized params
+    content = Column(JSON, nullable=True) # The actual tool result
+    
+    # Metadata & Provenance
+    inputs_hash = Column(String(64), nullable=False, index=True) # For de-duplication
+    provenance = Column(JSON, nullable=True) # {provider, model_family, run_id, etc.}
+    
+    # Lifecycle Status
+    # DRAFT, QUARANTINE, VERIFIED, STALE, ARCHIVED, DELETED
+    status = Column(String(20), default="DRAFT", index=True) 
+    
+    # Trust & Verification
+    trust_score = Column(Integer, default=50) # 0-100
+    verification_log = Column(JSON, default=list) # List of verification events
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    ttl_expiry = Column(DateTime(timezone=True), nullable=True) # When this evidence becomes STALE
+
+class Checkpoint(Base):
+    """
+    Checkpoint: Represents a context snapshot for Handoff/Continuation.
+    """
+    __tablename__ = 'checkpoints'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    debate_id = Column(String(36), nullable=False, index=True)
+    step_name = Column(String(100), nullable=True) # e.g. "pre_debate_analysis", "round_1"
+    
+    # Snapshot Content
+    context_snapshot = Column(JSON, nullable=False) # Key-Value pairs of current context
+    cited_evidence_ids = Column(JSON, default=list) # List of EvidenceDoc IDs referenced here
+    
+    # Next Actions
+    next_actions = Column(JSON, nullable=True) # Suggested next tools/steps
+    
+    # Lease / Token
+    lease_token = Column(String(64), nullable=True)
+    lease_expiry = Column(DateTime(timezone=True), nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -94,6 +94,32 @@ def create_tool(tool: schemas.ToolCreate, db: Session = Depends(get_db)):
                 python_code=db_tool.python_code,
                 schema=db_tool.json_schema
             )
+        elif db_tool.type == "mcp":
+            # [MCP Support]
+            try:
+                from adapters.generic_mcp_adapter import GenericMCPAdapter
+                # MCP tool definition usually contains the base URL and API config
+                url = db_tool.api_config.get("url")
+                
+                # Check for API key in config or assume it's part of URL
+                # For GenericMCPAdapter, we support api_key arg but here api_config stores key?
+                # Usually user puts key in Headers or Query.
+                # However, our Generic adapter has api_key support.
+                # Let's check api_config structure. Frontend should send {url:..., api_key:...}
+                api_key = db_tool.api_config.get("api_key")
+                
+                if url:
+                    mcp_adapter = GenericMCPAdapter(base_url=url, api_key=api_key)
+                    # Register entire MCP suite with prefix = tool name (group)
+                    tool_registry.register_mcp_adapter(mcp_adapter, prefix=db_tool.name, version=db_tool.version)
+                    print(f"✅ Auto-registered MCP tools for {db_tool.name}")
+                    
+                    # We don't register a single 'adapter' here, register_mcp_adapter handles multiple.
+                    # So set adapter to None to skip standard single registration
+                    adapter = None 
+            except Exception as e:
+                print(f"❌ Failed to register MCP tool {db_tool.name}: {e}")
+                adapter = None
             
         if adapter:
             tool_registry.register(adapter, group=db_tool.group)

@@ -5,6 +5,9 @@
 
 from api.tool_registry import tool_registry
 import json
+from datetime import datetime
+import os
+from worker.tool_manager import tool_manager
 
 # 重要常數
 STOCK_CODES = {
@@ -13,7 +16,17 @@ STOCK_CODES = {
     "加權指數": "Y9999"
 }
 
-CURRENT_DATE = "2025-12-05"
+# Dynamic Current Date (Format: YYYY-MM-DD)
+# Allow override via SIMULATION_DATE for backtesting or when DB is lagging
+CURRENT_DATE = os.getenv("SIMULATION_DATE", datetime.now().strftime("%Y-%m-%d"))
+
+# Deprecated: Logic moved to worker.tool_manager
+# Kept for backward compatibility if imported elsewhere
+def get_tool_ttl_config() -> dict:
+    return {}
+
+def resolve_tool_policy(tool_name: str) -> str:
+    return tool_manager.get_tool_config(tool_name).lifecycle
 
 def get_tools_description() -> str:
     """

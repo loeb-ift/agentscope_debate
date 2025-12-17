@@ -127,15 +127,110 @@ def launch_debate(config_id: str, db: Session = Depends(get_db)):
         args=[
             db_config.topic,
             teams_config,
-            db_config.rounds
+            db_config.rounds,
+            db_config.enable_cross_examination
         ]
     )
     
     # 將任務 ID 存儲到 Redis
     redis_client.set(f"debate:{task.id}:topic", db_config.topic)
     redis_client.set(f"debate:{task.id}:config_id", config_id)
+    # 基礎觀測/TTL 提示（可選）
+    redis_client.set(f"debate:{task.id}:created_at", str(db_config.created_at))
+    redis_client.set(f"debate:{task.id}:ttl_hint", os.getenv("DEBATE_TTL_HINT", ""))
     
-    return {"task_id": task.id, "status": "Debate launched", "config_id": config_id}
+    return {
+        "task_id": task.id,
+        "status": "Debate launched",
+        "config_id": config_id,
+        "topic": db_config.topic,
+        "rounds": db_config.rounds,
+        "enable_cross_examination": db_config.enable_cross_examination,
+        "sse_channel": f"debate:{task.id}:log_stream",
+    }
+
+
+@router.post("/api/v1/debates/new", status_code=201)
+def create_and_launch_debate(config: schemas.DebateConfigCreate, db: Session = Depends(get_db)):
+    """
+    一鍵：建立新的辯論設定並立即啟動，回傳 new debate_id 與 SSE channel。
+    """
+    # --- 建立設定（重用 create_debate_config 的核心邏輯） ---
+    max_teams = Config.MAX_TEAMS_PER_DEBATE
+    if len(config.teams) > max_teams:
+        raise HTTPException(status_code=400, detail=f"每場辯論最多只能有 {max_teams} 個辯論團")
+    max_members = Config.MAX_MEMBERS_PER_TEAM
+    all_debater_ids = set()
+    for team in config.teams:
+        if not (1 <= len(team.agent_ids) <= max_members):
+            raise HTTPException(status_code=400, detail=f"團隊 '{team.name}' 的代理人數必須為 1 到 {max_members} 人")
+        for agent_id in team.agent_ids:
+            all_debater_ids.add(agent_id)
+    if config.chairman_id and config.chairman_id in all_debater_ids:
+        raise HTTPException(status_code=400, detail="主席不能同時是辯論團成員")
+
+    db_config = models.DebateConfig(
+        topic=config.topic,
+        chairman_id=config.chairman_id,
+        rounds=config.rounds,
+        enable_cross_examination=config.enable_cross_examination
+    )
+    db.add(db_config)
+    db.commit()
+    db.refresh(db_config)
+
+    for team in config.teams:
+        db_team = models.DebateTeam(
+            debate_id=db_config.id,
+            team_name=team.name,
+            team_side=team.side,
+            agent_ids=team.agent_ids
+        )
+        db.add(db_team)
+    db.commit()
+
+    # --- 立即啟動（重用 launch_debate 的核心邏輯） ---
+    db_teams = db.query(models.DebateTeam).filter(models.DebateTeam.debate_id == db_config.id).all()
+    teams_config = []
+    for team in db_teams:
+        agents = []
+        for agent_id in team.agent_ids:
+            agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+            if agent:
+                agents.append({
+                    "name": agent.name,
+                    "id": agent.id,
+                    "role": agent.role,
+                    "specialty": agent.specialty,
+                    "system_prompt": agent.system_prompt,
+                    "config": agent.config_json
+                })
+        teams_config.append({"name": team.team_name, "side": team.team_side, "agents": agents})
+
+    task = celery_app.send_task(
+        'worker.tasks.run_debate_cycle',
+        args=[
+            db_config.topic,
+            teams_config,
+            db_config.rounds,
+            db_config.enable_cross_examination
+        ]
+    )
+
+    redis_client.set(f"debate:{task.id}:topic", db_config.topic)
+    redis_client.set(f"debate:{task.id}:config_id", db_config.id)
+    redis_client.set(f"debate:{task.id}:created_at", str(db_config.created_at))
+    redis_client.set(f"debate:{task.id}:ttl_hint", os.getenv("DEBATE_TTL_HINT", ""))
+
+    return {
+        "debate_id": task.id,
+        "config_id": db_config.id,
+        "topic": db_config.topic,
+        "rounds": db_config.rounds,
+        "enable_cross_examination": db_config.enable_cross_examination,
+        "sse_channel": f"debate:{task.id}:log_stream",
+        "status": "launched",
+    }
 
 @router.get("/api/v1/replays")
 def list_replays():

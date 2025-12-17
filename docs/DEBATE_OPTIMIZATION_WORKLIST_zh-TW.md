@@ -230,8 +230,27 @@
 ## 7. PR 模板與 ADR 模板（必須遵循）
 …（同前版，略）
 
+| U16 | 更新 chairman_summary.yaml    | Owner:E | 0.5d | [WIP]  | U1     | prompts/system/chairman_summary.yaml       | prompt lint / review                   |          |
+| U17 | SSOT 加入行為-事件對照表       | Owner:F | 0.5d | [WIP]  | U16    | docs/DEBATE_OPTIMIZATION_WORKLIST_zh-TW.md | doc lint                                |          |
+| U18 | SSOT 導引策略/模式切換/Gate 清單| Owner:G | 0.5d | [WIP]  | U16    | docs/DEBATE_OPTIMIZATION_WORKLIST_zh-TW.md | doc lint                                |          |
+| U19 | chairman 事件欄位規範（trace等）| Owner:H | 0.5d | [TODO] | U16    | docs/DEBATE_OPTIMIZATION_WORKLIST_zh-TW.md | N/A                                      |          |
+| U20 | 測試樣板：Plan/Requests/Mode    | Owner:I | 1d   | [DONE] | U16–U18| tests/*                                    | unit/integration                         | ✔        |
+
 ## 8. 開發智能體開發原則（務必遵循）
 …（同前版，略）
+
+### 8.1 Chairman 行為-事件對照表（新增）
+- 行為 / 事件
+  - GeneratePlanNodes → 事件：ChairmanRequestsPublished（含 plan_nodes 摘要、requests、trace_id/run_id）
+  - PublishRequests → 事件：ChairmanRequestsPublished（重複發佈時需去重註記）
+  - DetectModeSwitch → 事件：ChairmanModeSwitch（包含 rationale 與切換至 ranking_debate）
+  - SummarizeWithoutConclusion → 事件：ChairmanDecisionLog（記錄 Gate 結果、coverage、issues）
+- Gate 檢查清單（主席需檢查下列是否達標，未達標須退回或降權）
+  - Topic Gate（題目 Schema 完整）
+  - Evidence Gate（Tier / 來源數 / 新鮮度 / verified）
+  - Verifier Gate（引用覆蓋率、矛盾檢測）
+- 導引策略（主席不給結論，只導引方法與資料）
+  - 子問題拆解 → 工具/證據優先序 → Cross-Exam 模板 → 合法「不知道」 → 模式切換
 
 ## 9. 多供應商/多智能體接續規範（新）
 …（同前版，含 Checkpoint/Token schema 與 handoff 測試條款，略）
@@ -244,4 +263,76 @@
 
 —
 
+## 12. 搜尋工具合併計畫（U31–U36）
+
+| ID  | 名稱                                              | Owner  | 估時 | 狀態  | 依賴 | 主要檔案/說明                                 |
+|-----|---------------------------------------------------|--------|------|-------|------|----------------------------------------------|
+| U31 | SearXNG 啟用 DuckDuckGo 引擎與 engines 白名單     | TBD    | 0.5d | [WIP] | -    | searxng/settings.yml                          |
+| U32 | duckduckgo_adapter 改為 Deprecated shim           | Owner:J| 0.5d | [DONE]| U31? | adapters/duckduckgo_adapter.py → searxng 路由 |
+| U33 | tool_registry 路由調整（duckduckgo→searxng+engines)| Owner:K| 0.5d | [DONE]| U32  | api/tool_registry.py                           |
+| U34 | 測試更新（shim 與 engines='duckduckgo' 驗證）     | Owner:L| 0.5d | [DONE]| U32  | tests/test_duckduckgo_shim.py                 |
+| U35 | 文件更新（合併策略/engines示例/移除時間表）        | Owner:M| 0.5d | [WIP] | U32  | SSOT/README 更新                               |
+| U36 | 清理移除（過渡期後刪除 shim）                     | TBD    | 0.5d | [TODO]| U35  | 移除 adapters/duckduckgo_adapter.py            |
+
+- 合併策略：duckduckgo.search 已由 searxng.search 代理（engines='duckduckgo'）。新開發請使用 searxng.search + engines 指定。
+- engines 使用示例：{"q": "tsmc adr", "limit": 10, "engines": "duckduckgo"}；中立/監督者建議使用 'google cse' / 'brave api'（付費）。
+- 清理時間表：過渡期 2–4 週，完成 U31/U35 後執行 U36。
+
+## 13. 再辯論（新辯論）操作準則與核對表（新增）
+
+### 13.1 操作準則
+- 前端
+  - UI：「以此設定新開一局」按鈕（位於辯論結果頁）。點擊彈出可編輯的預填參數表單（題目、團隊、工具）。
+  - 防錯提示：若使用者在舊辯論頁直接改題目/團隊並送出，彈出提醒「將建立新辯論，避免沿用舊狀態」，並提供確認框。
+  - SSE 切換：建立成功（POST /debates）取得新 debate_id 後，前端停止舊 SSE、訂閱新 debate_id 的 channel。
+- 後端
+  - API：建議直接使用 POST /debates 建立新辯論（可選提供「複製/新建」端點）。
+  - 防汙染：對舊 debate_id 的 Redis/STMs 設定 TTL 或顯式釋放；新 id 開始前清理工作環境。
+  - 返回欄位：POST /debates 返回新 debate_id 與初始化狀態，以便前端立即接管。
+  - （可選）parent_debate_id：新辯論可記錄其來源辯論 id，便於回放與審計。
+- 測試
+  - E2E：從舊辯論結果頁按「以此設定新開一局」→ POST → SSE 訂閱切換 → 新事件流正常顯示。
+  - 邊界：舊 SSE 停止；新辯論不含上一輪 evidence/log；團隊與工具初始化一致。
+- 指標與觀測
+  - 追蹤「再辯論（新辯論）使用率」、新/舊 debate_id 的時序切換、重跑成功率。
+  - 指標最小集合：新辯論轉換率、平均建立時間、新/舊 SSE 切換延遲、舊訂閱存活時間。
+  - 一律以 debate_id 斷開、隔離所有狀態（evidence/log/metrics）。
+
+### 13.2 就緒核對表
+- [ ] 再辯論按鈕改為「新辯論（複製設定）」
+- [ ] POST /debates 回傳新 debate_id，前端切換 SSE
+- [ ] 舊 debate_id 的 SSE 停止訂閱
+- [ ] 新辯論初始化（團隊/工具/回合/STM）無殘留
+- [ ] SSOT/README 已更新操作準則
+- [ ] E2E 測試通過（以此設定新開一局）
+- [ ] 監控新/舊 id 切換與成功率
+
+### 13.3 追蹤任務（新增）
+| ID  | 名稱                                    | Owner  | 估時 | 狀態  | 依賴 | 主要檔案/說明                  |
+|-----|-----------------------------------------|--------|------|-------|------|-------------------------------|
+| U43 | 前端「以此設定新開一局」表單與流程      | TBD    | 1d   | [TODO]| -    | web 前端（結果頁/表單）         |
+| U44 | 前端防錯提示與 SSE 訂閱切換            | TBD    | 0.5d | [TODO]| U43  | web SSE 管理/提示              |
+| U45 | 後端 POST /debates 返回欄位與清理策略  | TBD    | 0.5d | [TODO]| -    | api/debate_routes.py / Redis   |
+| U46 | E2E 測試：新建→訂閱切換→新事件流       | TBD    | 1d   | [TODO]| U43–U45 | e2e 測試                      |
+| U47 | 指標與觀測：切換延遲/成功率/使用率      | TBD    | 0.5d | [TODO]| U43–U46 | metrics / dashboard          |
+
 附註：本文件為 SSOT，任何設計與流程變更需在此更新並回鏈至對應 PR/ADR/Issues。請於每日站會後更新「狀態總覽」與「追蹤表格」。
+
+—
+
+## 13. 智慧搜尋路由與驗證增強（U39–U42）
+
+| ID  | 名稱                                              | Owner  | 估時 | 狀態  | 依賴 | 主要檔案/說明                                 |
+|-----|---------------------------------------------------|--------|------|-------|------|----------------------------------------------|
+| U39 | 搜尋路由策略（Role/Group/Tier）                   | TBD    | 1d   | [TODO]| -    | adapters/search_router.py, api/tool_registry.py|
+| U40 | Verifier Gate 擴充（Coverage/Tier1 Source）       | TBD    | 1d   | [TODO]| U39  | worker/verifier_agent.py, worker/gate_utils.py|
+| U41 | 快取/配額/儀表板（Paid Search Quota/TTL）         | TBD    | 1d   | [TODO]| U39  | api/cache_service.py, web/app.py             |
+| U42 | 文檔與 Prompt 更新（SSOT/Chairman Prompts）       | TBD    | 0.5d | [TODO]| U40  | prompts/agents/*.yaml, SSOT                  |
+
+- 路由策略：
+  - Chairman/Reviewer/Guardrail → 使用 `search.paid` (Google CSE, Brave)。
+  - 一般辯手 → 使用 `search.free` (SearXNG Default)；若 Gate 驗證失敗可升級為 Paid。
+- Verifier Gate 擴充：
+  - 要求關鍵 Claim 至少 2 個獨立來源，且至少 1 個 Tier 1 (Google/Brave/Bing)。
+- Quota Management：
+  - 設定每日 Paid Search 配額，超額則降級為 Free 並發送告警。

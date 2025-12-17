@@ -16,7 +16,7 @@ class YFinanceAdapter(ToolAdapter):
 
     @property
     def description(self) -> str:
-        return "獲取股票的即時資訊和歷史數據"
+        return "Yahoo Finance 股票資訊查詢工具。提供全球股市的即時報價、歷史數據與相關新聞。"
 
     @property
     def cache_ttl(self) -> int:
@@ -28,14 +28,14 @@ class YFinanceAdapter(ToolAdapter):
             "type": "object",
             "properties": {
                 "symbol": {
-                    "type": "string", 
-                    "description": "股票代碼 (例如: AAPL, TSLA, 2330.TW)"
+                    "type": "string",
+                    "description": "股票代碼 (支援美股如 AAPL, 台股如 2330.TW)"
                 },
                 "info_type": {
                     "type": "string",
                     "enum": ["basic", "history", "news"],
                     "default": "basic",
-                    "description": "資訊類型: basic(基本資料), history(歷史股價), news(相關新聞)"
+                    "description": "查詢類型：basic (基本資料與即時價)、history (近一月歷史股價)、news (相關新聞)"
                 }
             },
             "required": ["symbol"]

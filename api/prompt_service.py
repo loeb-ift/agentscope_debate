@@ -113,14 +113,15 @@ class PromptService:
         return ""
 
     @classmethod
-    def compose_system_prompt(cls, db: Session, agent_key: str = None, override_content: str = None) -> str:
+    def compose_system_prompt(cls, db: Session, agent_key: str = None, override_content: str = None, agent_name: str = None) -> str:
         """
-        組合最終的 System Prompt (Base Contract + Agent Persona)。
+        組合最終的 System Prompt (Base Contract + Competency Core + Agent Persona)。
         
         Args:
             db: 資料庫 Session
-            agent_key: Agent 的 Prompt Key (e.g., 'agents.risk_officer')，若無則只返回 Contract
-            override_content: 直接傳入的 Agent Persona 內容 (可選)
+            agent_key: Agent 的 Prompt Key (e.g., 'agents.risk_officer')
+            override_content: 直接傳入的 Agent Persona 內容
+            agent_name: Agent 名稱 (用於判斷是否注入 Competency Core)
             
         Returns:
             str: 完整的 System Prompt
@@ -133,28 +134,37 @@ class PromptService:
         if cls._base_contract:
             c = cls._base_contract
             rules = c.get('rules', {})
-            
             rule_texts = []
             for rule_name, content in rules.items():
                 instruction = content.get('instruction', '')
                 rule_texts.append(f"### {rule_name.upper()}\n{instruction}")
-            
-            contract_body = "\n\n".join(rule_texts)
-            
-            contract_text = f"""
-# System Base Contract (MUST FOLLOW)
-The following rules are non-negotiable and override any persona instructions.
+            contract_text = f"# System Base Contract (MUST FOLLOW)\n{chr(10).join(rule_texts)}\n"
 
-{contract_body}
-"""
+        # 2. Load Competency Core (System Injection)
+        # Exclude special roles
+        excluded_roles = ["Chairman", "Guardrail", "Jury"]
+        should_inject_competency = True
+        
+        if agent_name and any(r in agent_name for r in excluded_roles):
+            should_inject_competency = False
+        
+        # If agent_key is explicit Chairman/Guardrail
+        if agent_key and ("chairman" in agent_key.lower() or "guardrail" in agent_key.lower() or "jury" in agent_key.lower()):
+            should_inject_competency = False
 
-        # 2. Load Agent Persona
+        competency_text = ""
+        if should_inject_competency:
+            competency_text = cls.get_prompt(db, "system.competency_core", default="")
+            if competency_text:
+                competency_text = f"\n\n{competency_text}\n"
+
+        # 3. Load Agent Persona
         persona_text = ""
         if override_content:
             persona_text = override_content
         elif agent_key:
             persona_text = cls.get_prompt(db, agent_key, default="")
 
-        # 3. Combine
-        full_prompt = f"{contract_text}\n\n# Agent Role & Specific Instructions\n{persona_text}"
+        # 4. Combine
+        full_prompt = f"{contract_text}{competency_text}\n\n# Agent Role & Specific Instructions\n{persona_text}"
         return full_prompt.strip()

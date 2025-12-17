@@ -106,7 +106,7 @@ class ToolTest(BaseModel):
 
 class ToolBase(BaseModel):
     name: str
-    type: str = "api"  # "api", "python", "internal"
+    type: str = "api"  # "api", "python", "internal", "mcp"
     json_schema: Dict[str, Any]
     
     # 舊字段（兼容性）

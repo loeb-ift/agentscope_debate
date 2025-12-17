@@ -80,6 +80,8 @@ debater.tool_instruction: |
 
   {tools_examples}
 
+  {fallback_hint}
+
   **強制指令**：
   1. **善用集體智慧**：在開始新調查前，強烈建議先調用 `search_shared_memory` 查詢是否已有隊友獲取了相關資訊，避免重複勞動。
   2. 如果你調用了工具，**發言中必須明確引用具體數字**（如金額、成長率、日期）。
@@ -162,3 +164,15 @@ chairman.summarize_debate_user: |
   {summary_text}
 
   請進行最終總結：
+
+debater.fallback_hint: |
+
+  💡 **重要提示 (Fallback Strategy)**：
+  1. **股價數據優先級**:
+     - **即時/今日股價**: `chinatimes.stock_rt` (最優先, 即時盤中) > `twse.stock_day` (盤後)
+     - **歷史回測**: `tej.stock_price` (優先) > `chinatimes.stock_kline` (近期趨勢)
+  2. **遇到空數據時**: 若 `tej` 回傳空列表 `[]`，這通常是因為資料庫尚未更新至 2025 年。請立即改用 `chinatimes.stock_rt` 或 `twse.stock_day` 查詢最新數據。
+  3. **搜尋關鍵字優化**: 若需使用 `searxng` 查找財報或新聞，**請勿僅搜尋代碼**。
+     - ❌ 避免: `"2330"`
+     - ✅ 推薦: `"2330.TW 2024 Q4 營收 YoY"` 或 `"台積電 法說會 重點"`
+  4. **宏觀經濟數據**: 若需要 GDP、CPI、央行政策等宏觀指標，且無專用工具時，請使用 `searxng.search` 或 `news.search_chinatimes` 查找最新新聞報導或分析報告。

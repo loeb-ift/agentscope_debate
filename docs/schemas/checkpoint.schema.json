@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/checkpoint.schema.json",
+  "title": "Checkpoint Artifact",
+  "type": "object",
+  "required": ["id", "type", "plan_node_id", "context_snapshot", "provenance", "ts"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": { "const": "Checkpoint" },
+    "plan_node_id": { "type": "string" },
+    "context_snapshot": { "type": "object" },
+    "inputs_hash": { "type": "string" },
+    "outputs_hash": { "type": "string" },
+    "next_actions": { "type": "array", "items": { "type": "string" } },
+    "provenance": { "$ref": "artifact.schema.json#/properties/provenance" },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

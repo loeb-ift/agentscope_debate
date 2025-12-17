@@ -11,17 +11,17 @@ class DatabaseToolBase(ToolAdapter):
 class SearchCompany(DatabaseToolBase):
     name = "internal.search_company"
     version = "v1"
-    description = "從內部資料庫搜尋公司資料。可使用名稱或代碼。返回公司 ID、名稱、Ticker、產業別 (Sector)、產業環節 (Group) 與子產業 (Sub-industry)。"
+    description = "內部公司資料庫搜尋。支援以公司名稱或代碼 (Ticker/ID) 進行模糊搜尋。返回公司基本資料、產業分類與市值資訊。"
 
     @property
     def schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "搜尋關鍵字 (名稱、代碼)"},
-                "q": {"type": "string", "description": "Alias for query"},
-                "keyword": {"type": "string", "description": "Alias for query"},
-                "limit": {"type": "integer", "default": 5}
+                "query": {"type": "string", "description": "搜尋關鍵字 (支援公司名稱、股票代碼、統編)"},
+                "q": {"type": "string", "description": "query 的別名"},
+                "keyword": {"type": "string", "description": "query 的別名"},
+                "limit": {"type": "integer", "default": 20, "description": "返回結果數量上限"}
             },
             "required": []
         }
@@ -37,7 +37,7 @@ class SearchCompany(DatabaseToolBase):
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
         # Support aliases
         query = kwargs.get("query") or kwargs.get("q") or kwargs.get("keyword") or kwargs.get("name") or kwargs.get("code")
-        limit = kwargs.get("limit", 5)
+        limit = kwargs.get("limit", 20)
         
         if not query:
             return {"error": "Missing required parameter: query (or q/keyword/name)"}
@@ -65,7 +65,7 @@ class SearchCompany(DatabaseToolBase):
                 })
             
             # Add guidance for agents to encourage using available data tools
-            hint = "💡 搜尋完成。請使用上方結果中的 'id' (或 'ticker') 作為參數，配合您已裝備的財務或股價查詢工具 (如 tej.* 或 yfinance.* 等) 獲取進一步數據。若您當前未裝備這些工具，請使用 `reset_equipped_tools(group='financial_data')` 切換工具組。"
+            hint = "💡 搜尋完成（已顯示前 20 筆）。請務必使用結果中的 'id' (或 'ticker')，進一步調用 `tej.stock_price` 或 `tej.financial_summary` 等工具來獲取具體數據。單純的公司列表不足以支持辯論。"
             return {"results": data, "system_hint": hint}
         finally:
             db.close()
@@ -73,16 +73,16 @@ class SearchCompany(DatabaseToolBase):
 class GetCompanyDetails(DatabaseToolBase):
     name = "internal.get_company_details"
     version = "v1"
-    description = "獲取公司詳細資料，包括財務概況與風險指標。"
+    description = "獲取特定公司的詳細檔案。包含財務概況、風險指標、產業地位與基本面數據。"
 
     @property
     def schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "string", "description": "公司 ID (Primary)"},
-                "id": {"type": "string", "description": "Alias for company_id"},
-                "coid": {"type": "string", "description": "Alias for company_id (TEJ style)"}
+                "company_id": {"type": "string", "description": "公司唯一識別碼 (Primary Key)"},
+                "id": {"type": "string", "description": "company_id 的別名"},
+                "coid": {"type": "string", "description": "company_id 的別名 (TEJ 風格)"}
             },
             "required": []
         }
@@ -133,7 +133,7 @@ class GetCompanyDetails(DatabaseToolBase):
 class GetSecurityDetails(DatabaseToolBase):
     name = "internal.get_security_details"
     version = "v1"
-    description = "獲取證券詳細資料 (Stock/Bond/ETF)。"
+    description = "獲取特定證券 (股票/債券/ETF) 的詳細規格與發行資訊。"
 
     @property
     def schema(self) -> Dict[str, Any]:

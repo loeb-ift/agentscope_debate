@@ -1,0 +1,184 @@
+version: "3.0"
+last_updated: "2024-01-15T10:30:00Z"
+
+# Default configuration for tools not explicitly listed
+defaults:
+  lifecycle: "static"
+  config:
+    ttl: 3600
+  permissions:
+    allow_ltm: true
+    allow_stale_on_error: false
+  cost:
+    api_cost_per_call: 0.0
+
+tools:
+  # ===== TEJ Market Data (Realtime / Volatile) =====
+  - name: "tej.stock_price"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300 # 5 mins
+      after_hours_ttl: "dynamic" # Until next open
+      jitter_percentage: 10
+    permissions:
+      allow_ltm: false # Prevent polluting LTM with transient prices
+      allow_stale_on_error: true # Allow stale price if API down
+      max_stale_age: 600 # Max 10 mins stale
+    cost:
+      api_cost_per_call: 0.01
+
+  - name: "yfinance.stock_price"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300
+      after_hours_ttl: "dynamic"
+      jitter_percentage: 10
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: true
+      max_stale_age: 600
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "tej.options_daily_trading"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300
+      after_hours_ttl: "dynamic"
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.01
+
+  - name: "tej.futures_data"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300
+      after_hours_ttl: "dynamic"
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.01
+
+  # ===== Search Tools (Short Term) =====
+  - name: "searxng.search"
+    lifecycle: "intraday"
+    config:
+      ttl: 3600 # 1 hour
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: false
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "duckduckgo.search"
+    lifecycle: "intraday"
+    config:
+      ttl: 3600
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: false
+    cost:
+      api_cost_per_call: 0.0
+
+  # ===== Periodic Financial Data (Quarterly/Monthly) =====
+  - name: "tej.financial_summary"
+    lifecycle: "periodic"
+    config:
+      update_cycle: "quarterly"
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.05
+
+  - name: "tej.monthly_revenue"
+    lifecycle: "periodic"
+    config:
+      update_cycle: "monthly"
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.05
+
+  # ===== Static / Reference Data =====
+  - name: "tej.company_info"
+    lifecycle: "static"
+    config:
+      ttl: 604800 # 7 days
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.01
+
+  - name: "internal.search_company"
+    lifecycle: "static"
+    config:
+      ttl: 604800
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "internal.get_company_details"
+    lifecycle: "static"
+    config:
+      ttl: 604800
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "tej.institutional_holdings"
+    lifecycle:
+      "static" # Usually EOD summary, treat as static for a day or 7 days? Or Intraday?
+      # Assuming it's daily EOD data, static for 24h is fine, but static usually implies longer.
+      # Let's map it to periodic or intraday. User's previous mapping was static.
+      # I'll use intraday for 24h or static for longer. Let's use intraday (daily).
+    config:
+      ttl: 86400
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.02
+
+  # ===== Verified / Official Tools (New) =====
+  - name: "twse.stock_day"
+    lifecycle: "realtime" # Daily updated, but treated as realtime for fetching latest
+    config:
+      trading_hours_ttl: 3600
+      after_hours_ttl: "dynamic"
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: false
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "yahoo.stock_price"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300
+      after_hours_ttl: "dynamic"
+    permissions:
+      allow_ltm: false
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.0
+
+  - name: "financial.get_verified_price"
+    lifecycle: "realtime"
+    config:
+      trading_hours_ttl: 300
+      after_hours_ttl: "dynamic"
+    permissions:
+      allow_ltm: true
+      allow_stale_on_error: true
+    cost:
+      api_cost_per_call: 0.01 # Logic overhead

@@ -1,0 +1,289 @@
+{
+	"info": {
+		"_postman_id": "ac7eebf8-d42c-4015-abbb-13a773e10fc2",
+		"name": "時報資訊",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "503324"
+	},
+	"item": [
+		{
+			"name": "理財網",
+			"item": [
+				{
+					"name": "前台API",
+					"item": [
+						{
+							"name": "[上市櫃] 加權櫃檯指數 圖表",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/twse_tpex/tpex_otc",
+									"host": [
+										"https://wantrich.chinatimes.com/api/twse_tpex"
+									],
+									"path": [
+										"tpex_otc"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "[上市櫃] 上市類股表現 前5後5",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/tse_top10",
+									"protocol": "https",
+									"host": [
+										"local",
+										"ci"
+									],
+									"port": "448",
+									"path": [
+										"api",
+										"tse_top10"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "[上市櫃]上市櫃Top5",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock_list/TSE",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock_list"
+									],
+									"path": [
+										"TSE"
+									]
+								},
+								"description": "TSE上市 | OTC上櫃"
+							},
+							"response": []
+						},
+						{
+							"name": "某類股清單",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/sector_list/37/ASC",
+									"host": [
+										"https://wantrich.chinatimes.com/api/sector_list"
+									],
+									"path": [
+										"37",
+										"ASC"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "某類股漲跌幅",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/sector/41",
+									"host": [
+										"https://wantrich.chinatimes.com/api/sector"
+									],
+									"path": [
+										"41"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "台灣個股",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock/stk_tw/1101/c1",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock"
+									],
+									"path": [
+										"stk_tw",
+										"1101",
+										"c1"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "新聞內頁 > 個股觀測",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock_check/2330,0050",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock_check"
+									],
+									"path": [
+										"2330,0050"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "台灣個股即時",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock_rt/3064",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock_rt"
+									],
+									"path": [
+										"3064"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "搜尋=>台股內頁(股號,股名)",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock/stk_tw/TWNMKT/c1",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock"
+									],
+									"path": [
+										"stk_tw",
+										"TWNMKT",
+										"c1"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "個股 (定存股,成長股,技術面)",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock_check/2330",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock_check"
+									],
+									"path": [
+										"2330"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "[即時][Delta]加權&櫃檯指數",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/stock_rt/TWSE_SEM_INDEX_1",
+									"host": [
+										"https://wantrich.chinatimes.com/api/stock_rt"
+									],
+									"path": [
+										"TWSE_SEM_INDEX_1"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "[新聞內頁][相關族群]類股複選",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/sector_multiple/12,13",
+									"host": [
+										"https://wantrich.chinatimes.com/api/sector_multiple"
+									],
+									"path": [
+										"12,13"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "關鍵字搜尋",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/search_auto/天",
+									"host": [
+										"https://wantrich.chinatimes.com/api/search_auto"
+									],
+									"path": [
+										"天"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "個股搜尋",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/search/台積電/stock_name/1",
+									"host": [
+										"https://wantrich.chinatimes.com/api/search"
+									],
+									"path": [
+										"台積電",
+										"stock_name",
+										"1"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "個股相關新聞",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "https://wantrich.chinatimes.com/api/search_stock_news/2330/台積電/1",
+									"host": [
+										"https://wantrich.chinatimes.com/api/search_stock_news"
+									],
+									"path": [
+										"2330",
+										"台積電",
+										"1"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		}
+	]
+}

@@ -259,94 +259,77 @@ class HippocampalMemory:
 
     async def store(self, agent_id: str, tool: str, params: dict, result: Any):
         """
-        感知層入口：將工具執行結果存入工作記憶 (Working Memory)。
+        感知層入口：將工具執行結果存入 Evidence Lifecycle System (取代單純 Redis)。
+        Flow:
+        1. Lifecycle.ingest (Create DRAFT)
+        2. Lifecycle.verify (DRAFT -> VERIFIED/QUARANTINE)
+        3. If Verified, cache in Redis (Hot Tier)
         """
         start = time.time()
         
-        # [Fix 1] Check for Empty/Invalid Result
-        # If result is empty list data, or contains warnings like "date_span_too_large",
-        # we should NOT cache it, or cache for very short time.
-        should_cache = True
-        ttl_override = None
+        # [Lifecycle Integration]
+        # Lazy load due to circular imports or initialization context
+        from worker.evidence_lifecycle import EvidenceLifecycle
+        lc = EvidenceLifecycle(self.debate_id)
         
-        if isinstance(result, dict):
-            # Check for TEJ empty data pattern
-            if "data" in result and isinstance(result["data"], list) and len(result["data"]) == 0:
-                 # Check if it was a TEJ tool (heuristic by tool name)
-                 if tool.startswith("tej."):
-                     logger.warning(f"Hippocampus: Skipping cache for empty TEJ result: {tool}")
-                     should_cache = False
-            
-            # Check for Warnings
-            if "warnings" in result and result["warnings"]:
-                 # If critical warnings exist, don't cache
-                 warnings = result["warnings"]
-                 if any("date_span_too_large" in w for w in warnings):
-                     logger.warning(f"Hippocampus: Skipping cache for invalid query: {tool} (date_span_too_large)")
-                     should_cache = False
-
-        if not should_cache:
+        # 1. Ingest
+        doc = lc.ingest(agent_id, tool, params, result)
+        
+        # 2. Verify (Immediate Sync Verification for now)
+        # In a real async pipeline, this might be a separate task.
+        doc = lc.verify(doc.id)
+        
+        if doc.status == "QUARANTINE":
+            logger.warning(f"Hippocampus: Evidence {doc.id} quarantined. Reason: {doc.verification_log[-1].get('reason')}")
+            # Do NOT cache in Hot Tier (Redis) to avoid pollution
             return
 
+        # 3. Cache in Redis (Hot Tier) if Verified
+        # We still use Redis for fast retrieval by Agent, but now it's backed by DB.
+        
         key = self._get_wm_key(tool, params)
         timestamp = time.time()
         
-        # [Fix 2] Atomic Access Counter
-        # We store the main data in 'key', and access count in 'key:access'
-        # To avoid race conditions.
-        
-        # Structure for Working Memory
+        # Structure - Add Evidence ID
         memory_item = {
             "id": key,
+            "evidence_id": doc.id, # Link to SSOT
             "agent_id": agent_id,
             "tool": tool,
             "params": params,
-            "result": result,
+            "result": result, # We still keep content in Redis for speed
             "timestamp": timestamp,
             "created_at_iso": datetime.fromtimestamp(timestamp).isoformat(),
             # Metrics V2
             "metadata": {
-                "trust_level": "unverified", # unverified, verified, highly_trusted, disputed
-                "verification_history": [],
+                "trust_level": "verified", # Confirmed by Lifecycle
+                "verification_history": doc.verification_log,
                 "scores": {
                     "base": 50,
-                    "bonus_verification": 0,
-                    "bonus_adoption": 0,
-                    "penalty_decay": 0,
-                    "total": 50
+                    "bonus_verification": 20, # Bonus for passing Lifecycle
+                    "total": 70
                 },
                 "usage_stats": {
                     "retrieved": 1,
                     "adopted": 0,
-                    "success": 0,
-                    "misleading": 0
                 }
             },
-            # Legacy fields mapping to V2 for compatibility
             "retrieved_count": 1,
             "adopted_count": 0,
-            "success_count": 0,
-            "misleading_count": 0,
             "consolidated": False
         }
         
-        # Store Data
-        ttl = ttl_override or self._get_ttl(tool)
+        # Cache with TTL
+        ttl = self._get_ttl(tool)
         self.redis.set(key, json.dumps(memory_item, default=str), ex=ttl)
         
-        # Atomic Increment Access Count
-        # Use hincrby on the memory item hash if we were using hash, but here we use a separate key.
-        # Ideally we should use a single Hash key for metadata to be truly atomic,
-        # but separate keys with Lua script or simple INCR is 'good enough' for this use case.
+        # Access Count
         access_key = f"{key}:access"
         new_count = self.redis.incr(access_key)
-        self.redis.expire(access_key, ttl) # Sync TTL
-        
-        # Double check if we need to update the main item with new access count?
-        # No, retrieval handles that dynamically.
+        self.redis.expire(access_key, ttl)
         
         elapsed = time.time() - start
-        logger.info(f"Hippocampus stored WM: {tool} (Access: {new_count}) in {elapsed:.4f}s")
+        logger.info(f"Hippocampus stored Evidence {doc.id} (Status: {doc.status}) in {elapsed:.4f}s")
 
     async def retrieve_working_memory(self, tool: str, params: dict) -> Optional[Dict]:
         """

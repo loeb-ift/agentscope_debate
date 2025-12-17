@@ -18,11 +18,21 @@ from api import schemas, models, financial_models
 from api.database import SessionLocal, engine, init_db
 from api.init_data import initialize_all
 from worker.celery_app import app as celery_app, load_dynamic_tools
+from api.config import Config
 from api.tool_registry import tool_registry
 from api.redis_client import get_redis_client
 from adapters.searxng_adapter import SearXNGAdapter
 from adapters.duckduckgo_adapter import DuckDuckGoAdapter
 from adapters.yfinance_adapter import YFinanceAdapter
+# Lazy import helper for conditional tools
+def lazy_import_factory(module_name, class_name):
+    def factory():
+        import importlib
+        module = importlib.import_module(module_name)
+        cls = getattr(module, class_name)
+        return cls()
+    return factory
+
 from adapters.tej_adapter import (
     TEJCompanyInfo, TEJStockPrice, TEJMonthlyRevenue, TEJInstitutionalHoldings,
     TEJMarginTrading, TEJForeignHoldings, TEJFinancialSummary, TEJFundNAV,
@@ -91,6 +101,19 @@ async def startup_event():
     tool_registry.register(SearXNGAdapter())
     tool_registry.register(DuckDuckGoAdapter())
     tool_registry.register(YFinanceAdapter())
+    
+    # ChinaTimes Suite (Conditional)
+    if Config.ENABLE_CHINATIMES_TOOLS:
+        print("📰 Registering ChinaTimes tools...")
+        tool_registry.register_lazy("news.search_chinatimes", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesSearchAdapter"), group="browser_use", description="[PRIORITY] Search ChinaTimes News for Taiwan related topics")
+        tool_registry.register_lazy("chinatimes.stock_rt", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockRTAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Realtime Stock Data")
+        tool_registry.register_lazy("chinatimes.stock_news", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockNewsAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock News")
+        tool_registry.register_lazy("chinatimes.stock_kline", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockKlineAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock K-Line History (Day K)")
+        tool_registry.register_lazy("chinatimes.market_index", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesMarketIndexAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Market Indexes (TWSE/OTC)")
+        tool_registry.register_lazy("chinatimes.market_rankings", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesMarketRankingsAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Market Rankings (Top 10)")
+        tool_registry.register_lazy("chinatimes.sector_info", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesSectorAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Sector Info")
+        tool_registry.register_lazy("chinatimes.stock_fundamental", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockFundamentalAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock Fundamental Check")
+
     tool_registry.register(TEJCompanyInfo())
     tool_registry.register(TEJStockPrice())
     tool_registry.register(TEJMonthlyRevenue())
@@ -129,6 +152,7 @@ from api.prompt_routes import router as prompt_router
 from api.tool_routes import router as tool_router
 from api.internal_api import router as internal_router
 from api.toolset_routes import router as toolset_router
+from api.routers.cache_management import router as cache_router
 
 app.include_router(agent_router)
 app.include_router(debate_router)
@@ -136,6 +160,7 @@ app.include_router(prompt_router)
 app.include_router(tool_router)
 app.include_router(internal_router)
 app.include_router(toolset_router)
+app.include_router(cache_router, prefix="/api/v1")
 
 # Health check endpoint
 @app.get("/health")
@@ -174,10 +199,24 @@ async def stream_debate(task_id: str):
     透過 Server-Sent Events (SSE) 實時串流辯論的思考流。
     """
     def event_stream():
+        print(f"[DEBUG API] Client connected to stream for task {task_id}", flush=True)
+        # 1. Send historical logs first
+        history_key = f"debate:{task_id}:log_history"
+        try:
+            history = redis_client.lrange(history_key, 0, -1)
+            print(f"[DEBUG API] Found {len(history)} history items for {task_id}", flush=True)
+            for log_json in history:
+                yield f"data: {log_json}\n\n"
+        except Exception as e:
+            print(f"Error fetching log history: {e}", flush=True)
+
+        # 2. Subscribe to new logs
+        print(f"[DEBUG API] Subscribing to debate:{task_id}:log_stream", flush=True)
         pubsub = redis_client.pubsub()
         pubsub.subscribe(f"debate:{task_id}:log_stream")
         for message in pubsub.listen():
             if message['type'] == 'message':
+                # print(f"[DEBUG API] Sending message: {message['data'][:50]}...", flush=True)
                 yield f"data: {message['data']}\n\n"
     
     return StreamingResponse(event_stream(), media_type="text/event-stream")

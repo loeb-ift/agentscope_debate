@@ -9,22 +9,215 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from api.vector_store import VectorStore
 from api.config import Config
 
-# Configuration
-OLLAMA_HOST = Config.OLLAMA_HOST
-if OLLAMA_HOST:
-    if not OLLAMA_HOST.startswith(("http://", "https://")):
-        OLLAMA_HOST = f"http://{OLLAMA_HOST}"
-    
-    # Warning for 0.0.0.0/localhost in Docker environment
-    if "0.0.0.0" in OLLAMA_HOST or "localhost" in OLLAMA_HOST or "127.0.0.1" in OLLAMA_HOST:
-        print(f"⚠️ WARNING: OLLAMA_HOST is set to '{OLLAMA_HOST}'. Inside a Docker container, this refers to the container itself, not the host machine. If Ollama is running on the host, please use the host's LAN IP or 'host.docker.internal' (if supported).")
-
-OLLAMA_MODEL = Config.OLLAMA_MODEL
-MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENCY", "5")) # Keep env for concurrency for now
+# Configuration Constants
 REQUEST_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
+MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENCY", "5"))
 
 # Global Semaphore
 _semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+class LLMProvider:
+    def __init__(self):
+        pass
+
+    async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        raise NotImplementedError
+
+    def chat_completion_sync(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        raise NotImplementedError
+
+class OllamaProvider(LLMProvider):
+    def __init__(self):
+        self.host = Config.OLLAMA_HOST
+        if self.host and not self.host.startswith(("http://", "https://")):
+            self.host = f"http://{self.host}"
+        
+        # Check for container environment
+        if self.host and ("0.0.0.0" in self.host or "localhost" in self.host or "127.0.0.1" in self.host):
+             # Just a warning, not blocking
+             pass
+
+    def _prepare_payload(self, messages: List[Dict], tools: List[Dict] = None, model: str = None):
+        payload = {
+            "model": model or Config.OLLAMA_MODEL,
+            "messages": messages,
+            "stream": False
+        }
+        if tools:
+            payload["tools"] = tools
+        return payload
+
+    async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = f"{self.host}/api/chat"
+        payload = self._prepare_payload(messages, tools, model)
+        
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return self._parse_response(result)
+
+    def chat_completion_sync(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = f"{self.host}/api/chat"
+        payload = self._prepare_payload(messages, tools, model)
+        
+        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        result = response.json()
+        return self._parse_response(result)
+
+    def _parse_response(self, result: Dict) -> str:
+        message = result.get("message", {})
+        content = message.get("content", "")
+        
+        if "tool_calls" in message and message["tool_calls"]:
+            tool_result = _process_tool_calls(message["tool_calls"])
+            if tool_result:
+                return tool_result
+        return content
+
+class AzureOpenAIProvider(LLMProvider):
+    def __init__(self):
+        self.endpoint = Config.AZURE_OPENAI_ENDPOINT
+        self.api_key = Config.AZURE_OPENAI_API_KEY
+        self.deployment = Config.AZURE_OPENAI_MODEL_DEPLOYMENT
+        self.api_version = getattr(Config, "AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+        
+        # Validate config
+        if not self.endpoint or not self.api_key or not self.deployment:
+            print("⚠️ Azure OpenAI Config Missing. Please check .env")
+
+    def _get_url(self):
+        # Format: https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
+        base = self.endpoint.rstrip('/')
+        return f"{base}/openai/deployments/{self.deployment}/chat/completions?api-version={self.api_version}"
+
+    def _prepare_payload(self, messages: List[Dict], tools: List[Dict] = None, model: str = None):
+        # Azure OpenAI expects standard OpenAI chat format
+        # Model is handled via deployment URL, but some libs pass it in body. We can skip it or pass deployment name.
+        payload = {
+            "messages": messages,
+            "stream": False
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        return payload
+
+    def _get_headers(self):
+        return {
+            "Content-Type": "application/json",
+            "api-key": self.api_key
+        }
+
+    async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = self._get_url()
+        payload = self._prepare_payload(messages, tools, model)
+        headers = self._get_headers()
+        
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            return self._parse_response(result)
+
+    def chat_completion_sync(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = self._get_url()
+        payload = self._prepare_payload(messages, tools, model)
+        headers = self._get_headers()
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        result = response.json()
+        return self._parse_response(result)
+
+    def _parse_response(self, result: Dict) -> str:
+        # Standard OpenAI response format
+        choices = result.get("choices", [])
+        if not choices:
+            return ""
+            
+        message = choices[0].get("message", {})
+        content = message.get("content") or "" # Content can be None if tool_calls present
+        
+        if "tool_calls" in message and message["tool_calls"]:
+            tool_result = _process_tool_calls(message["tool_calls"])
+            if tool_result:
+                return tool_result
+        return content
+
+class OpenAIProvider(LLMProvider):
+    # Implementation for generic OpenAI compatible APIs (DeepSeek, etc.)
+    def __init__(self):
+        self.base_url = getattr(Config, "OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.api_key = getattr(Config, "OPENAI_API_KEY", "")
+        self.model = getattr(Config, "OPENAI_MODEL", "gpt-4")
+
+    def _get_url(self):
+        return f"{self.base_url.rstrip('/')}/chat/completions"
+
+    def _get_headers(self):
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+    def _prepare_payload(self, messages: List[Dict], tools: List[Dict] = None, model: str = None):
+        payload = {
+            "model": model or self.model,
+            "messages": messages,
+            "stream": False
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        return payload
+
+    async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = self._get_url()
+        payload = self._prepare_payload(messages, tools, model)
+        headers = self._get_headers()
+        
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            return self._parse_response(result)
+
+    def chat_completion_sync(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
+        url = self._get_url()
+        payload = self._prepare_payload(messages, tools, model)
+        headers = self._get_headers()
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        result = response.json()
+        return self._parse_response(result)
+
+    def _parse_response(self, result: Dict) -> str:
+        # Same as Azure
+        choices = result.get("choices", [])
+        if not choices:
+            return ""
+        message = choices[0].get("message", {})
+        content = message.get("content") or ""
+        if "tool_calls" in message and message["tool_calls"]:
+            tool_result = _process_tool_calls(message["tool_calls"])
+            if tool_result:
+                return tool_result
+        return content
+
+def get_llm_provider() -> LLMProvider:
+    provider_name = getattr(Config, "LLM_PROVIDER", "ollama").lower()
+    
+    if provider_name == "azure_openai":
+        return AzureOpenAIProvider()
+    elif provider_name == "openai":
+        return OpenAIProvider()
+    else:
+        return OllamaProvider()
+
+# --- Common Utils ---
 
 def _process_tool_calls(tool_calls: List[Dict]) -> Optional[str]:
     """Helper to process tool calls from LLM response."""
@@ -35,13 +228,14 @@ def _process_tool_calls(tool_calls: List[Dict]) -> Optional[str]:
         tool_name = function_call.get("name")
         function_args = function_call.get("arguments", {})
         
-        print(f"DEBUG: Processing tool_call - name: {tool_name}, args type: {type(function_args)}")
+        # print(f"DEBUG: Processing tool_call - name: {tool_name}, args type: {type(function_args)}")
         
         if isinstance(function_args, str):
             try:
                 args_dict = json.loads(function_args)
             except json.JSONDecodeError:
                 try:
+                    # Fix single quotes
                     args_dict = json.loads(function_args.replace("'", '"'))
                 except:
                     print(f"WARNING: Could not parse tool arguments string: {function_args}")
@@ -49,10 +243,7 @@ def _process_tool_calls(tool_calls: List[Dict]) -> Optional[str]:
         else:
             args_dict = function_args
         
-        print(f"DEBUG: Normalized args: {args_dict}")
-        
-        # Construct the JSON string our DebateCycle expects
-        # Format: {"tool": "tool_name", "params": {...}}
+        # Standardize params
         if "params" in args_dict and len(args_dict) == 1:
              params = args_dict["params"]
         else:
@@ -71,194 +262,156 @@ def _process_tool_calls(tool_calls: List[Dict]) -> Optional[str]:
         print(f"ERROR: Failed to process tool_calls: {e}")
         return None
 
-def call_llm(prompt: str, system_prompt: str = None, model: str = None) -> str:
-    """
-    Sync Call the LLM (Ollama) with the given prompt.
-    Kept for backward compatibility.
-    """
-    if not model:
-        model = OLLAMA_MODEL
+# --- Main Interfaces ---
 
-    url = f"{OLLAMA_HOST}/api/chat"
-    
+def call_llm(prompt: str, system_prompt: str = None, model: str = None, tools: List[Dict] = None) -> str:
+    """Sync Call Wrapper"""
+    provider = get_llm_provider()
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
-
+    
     try:
         start_time = time.time()
-        print(f"DEBUG: Calling LLM (Sync) model={model}...")
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
+        print(f"DEBUG: Calling LLM (Sync) via {type(provider).__name__}...")
+        content = provider.chat_completion_sync(messages, tools, model)
         elapsed = time.time() - start_time
         print(f"DEBUG: LLM (Sync) finished in {elapsed:.2f}s")
-        result = response.json()
-        message = result.get("message", {})
-        content = message.get("content", "")
-        
-        # Handle tool_calls if present (Ollama standard format)
-        if "tool_calls" in message and message["tool_calls"]:
-            tool_result = _process_tool_calls(message["tool_calls"])
-            if tool_result:
-                return tool_result
-
-        if not content:
-             print(f"WARNING: LLM returned empty content. Full result: {result}")
-        
-        # Sync version doesn't support async semantic cache storage easily without a loop.
-        # Skipping cache storage for sync call to avoid complexity.
-        pass
-
         return content
     except Exception as e:
         print(f"Error calling LLM (Sync): {e}")
+        # Log payload debug if bad request
+        if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 400:
+             print(f"CRITICAL: 400 Bad Request. Body: {e.response.text}")
         return f"Error: {e}"
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError))
-)
+# --- Semantic Cache ---
+
+class SemanticCacheBuffer:
+    _instance = None
+    def __init__(self):
+        self._buffer = []
+        self.batch_size = 5
+        self.stats = {"hits": 0, "misses": 0}
+        
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = SemanticCacheBuffer()
+        return cls._instance
+        
+    async def add(self, query: str, metadata: Dict[str, Any]):
+        self._buffer.append((query, metadata))
+        if len(self._buffer) >= self.batch_size:
+            await self.flush()
+            
+    async def flush(self):
+        if not self._buffer: return
+        batch = self._buffer[:]
+        self._buffer.clear()
+        try:
+            await VectorStore.add_texts(
+                collection_name="llm_semantic_cache",
+                texts=[b[0] for b in batch],
+                metadatas=[b[1] for b in batch]
+            )
+        except Exception as e:
+            print(f"Failed to flush semantic cache: {e}")
+
+_semantic_cache_buffer = SemanticCacheBuffer.get_instance()
+
 async def _update_semantic_cache(cache_query: str, content: str, model: str, context_tag: Optional[str]):
-    """Background task to update semantic cache."""
     try:
         metadata = {
             "response": content,
-            "model": model,
+            "model": model or Config.OLLAMA_MODEL,
             "timestamp": time.time()
         }
-        if context_tag:
-            metadata["context"] = context_tag
-            
-        await VectorStore.add_texts(
-            collection_name="llm_semantic_cache",
-            texts=[cache_query],
-            metadatas=[metadata]
-        )
-        # print(f"DEBUG: Cache updated in background.")
+        if context_tag: metadata["context"] = context_tag
+        await _semantic_cache_buffer.add(cache_query, metadata)
     except Exception as e:
-        print(f"Failed to update cache (background): {e}")
+        print(f"Failed to queue cache update: {e}")
 
-async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: str = None) -> str:
-    """Internal implementation with retry logic."""
-    url = f"{OLLAMA_HOST}/api/chat"
-    
+async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: str = None, tools: List[Dict] = None) -> str:
+    """Internal Async Implementation"""
+    provider = get_llm_provider()
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
-
     async with _semaphore:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            try:
-                start_time = time.time()
-                print(f"DEBUG: Calling LLM (Async) model={model}...")
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                elapsed = time.time() - start_time
-                print(f"DEBUG: LLM (Async) finished in {elapsed:.2f}s")
-                
-                result = response.json()
-                message = result.get("message", {})
-                content = message.get("content", "")
-                
-                # Handle tool_calls if present (Ollama standard format)
-                if "tool_calls" in message and message["tool_calls"]:
-                    tool_result = _process_tool_calls(message["tool_calls"])
-                    if tool_result:
-                        return tool_result
+        try:
+            start_time = time.time()
+            print(f"DEBUG: Calling LLM (Async) via {type(provider).__name__}...")
+            content = await provider.chat_completion(messages, tools, model)
+            elapsed = time.time() - start_time
+            print(f"DEBUG: LLM (Async) finished in {elapsed:.2f}s")
+            return content
+        except Exception as e:
+             if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 400:
+                 print(f"CRITICAL: 400 Bad Request. Body: {e.response.text}")
+             print(f"Error calling LLM (Async): {e}")
+             raise e
 
-                if not content:
-                     print(f"WARNING: LLM returned empty content. Full result: {result}")
-                
-                return content
-            except Exception as e:
-                print(f"Error calling LLM (Async): {e}")
-                raise e # Let tenacity handle retry
-
-async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None, context_tag: str = None) -> str:
-    """
-    Async Call the LLM (Ollama) with throttling, retries, and semantic caching.
-    Wrapper to handle RetryError gracefully.
-    """
-    if not model:
-        model = OLLAMA_MODEL
-
-    # --- Semantic Cache Lookup ---
+async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None, context_tag: str = None, tools: List[Dict] = None) -> str:
+    """Async Wrapper with Semantic Caching & Retry"""
+    
+    # Semantic Cache Logic
     cache_query = f"System: {system_prompt}\nUser: {prompt}"
-    try:
-        # Construct filter if context_tag is provided
-        filter_cond = None
-        if context_tag:
-            filter_cond = {"context": context_tag}
-
-        # Note: Ideally we want a similarity score threshold (e.g. > 0.95).
-        # VectorStore.search returns payloads of top-k matches.
-        # We blindly trust the top 1 match for now as a POC.
-        # Real production usage requires modifying VectorStore to return scores.
-        cached_results = await VectorStore.search(
-            collection_name="llm_semantic_cache",
-            query=cache_query,
-            limit=1,
-            filter_conditions=filter_cond
-        )
-        
-        if cached_results and len(cached_results) > 0:
-             entry = cached_results[0]
-             
-             # Check TTL
-             timestamp = entry.get('timestamp')
-             ttl = getattr(Config, 'SEMANTIC_CACHE_TTL', 86400) # Default 24h
-             
-             is_valid = True
-             if timestamp:
-                 if time.time() - timestamp > ttl:
-                     print(f"DEBUG: Semantic Cache Hit but EXPIRED (Age: {time.time() - timestamp:.2f}s > {ttl}s)")
+    skip_cache = False
+    
+    time_keywords = ["今天", "現在", "current", "today", "now", "real-time"]
+    has_time_keyword = any(k in prompt.lower() for k in time_keywords)
+    
+    if has_time_keyword and not tools:
+         skip_cache = True
+    
+    if not skip_cache:
+        try:
+            filter_cond = {"context": context_tag} if context_tag else None
+            cached_results = await VectorStore.search(
+                collection_name="llm_semantic_cache",
+                query=cache_query,
+                limit=1,
+                filter_conditions=filter_cond
+            )
+            
+            if cached_results:
+                 entry = cached_results[0]
+                 timestamp = entry.get('timestamp')
+                 ttl = getattr(Config, 'SEMANTIC_CACHE_TTL', 86400)
+                 
+                 is_valid = True
+                 if timestamp and (time.time() - timestamp > ttl):
                      is_valid = False
-             
-             if is_valid:
-                 cached_resp = entry.get('response')
-                 if cached_resp:
-                     # CRITICAL FIX: Prevent infinite loops with Meta-Tools
-                     # If the cached response is a tool call to 'reset_equipped_tools',
-                     # we should avoid using the cache because this action is state-dependent
-                     # and using a stale cache can cause an infinite loop (reset -> reset -> reset).
-                     if '"tool": "reset_equipped_tools"' in cached_resp or "'tool': 'reset_equipped_tools'" in cached_resp:
-                         print("DEBUG: Semantic Cache Hit but SKIPPED (Dangerous Meta-Tool detected)")
-                     else:
-                         print("DEBUG: Semantic Cache Hit")
-                         return cached_resp
-                     
-    except Exception as e:
-        print(f"Cache lookup failed: {e}")
-    # -----------------------------
+                 
+                 if is_valid:
+                     cached_resp = entry.get('response')
+                     if cached_resp:
+                         if has_time_keyword and "{" not in cached_resp:
+                             pass # Skip volatile text
+                         elif '"tool": "reset_equipped_tools"' in cached_resp:
+                             pass # Skip unsafe meta-tool
+                         else:
+                             print("DEBUG: Semantic Cache Hit")
+                             _semantic_cache_buffer.stats["hits"] += 1
+                             return cached_resp
+        except Exception as e:
+            print(f"Cache lookup failed: {e}")
+
+    _semantic_cache_buffer.stats["misses"] += 1
 
     try:
-        content = await _call_llm_async_impl(prompt, system_prompt, model)
-        
-        # --- Store in Semantic Cache (Fire-and-Forget) ---
+        content = await _call_llm_async_impl(prompt, system_prompt, model, tools=tools)
         if content:
             asyncio.create_task(_update_semantic_cache(cache_query, content, model, context_tag))
-        # ---------------------------------------
         return content
 
     except RetryError:
-        error_msg = f"LLM Generation Failed: Timeout after multiple retries ({REQUEST_TIMEOUT}s each). Please check your Ollama service performance."
+        error_msg = f"LLM Generation Failed: Timeout after multiple retries. Provider: {Config.LLM_PROVIDER}"
         print(f"CRITICAL ERROR: {error_msg}")
         return f"Error: {error_msg}"
     except Exception as e:
-        print(f"Unexpected error in call_llm_async: {e}")
         return f"Error: {e}"

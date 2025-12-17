@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/continuation_token.schema.json",
+  "title": "Continuation Token",
+  "type": "object",
+  "required": ["debate_id", "plan_node_id", "lease_expiry", "allowed_tools", "schema_version"],
+  "properties": {
+    "debate_id": { "type": "string" },
+    "plan_node_id": { "type": "string" },
+    "lease_expiry": { "type": "string", "format": "date-time" },
+    "allowed_tools": { "type": "array", "items": { "type": "string" } },
+    "schema_version": { "type": "string" }
+  },
+  "additionalProperties": false
+}

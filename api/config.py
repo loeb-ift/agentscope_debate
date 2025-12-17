@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     # Debate Configuration
     MAX_TEAMS_PER_DEBATE = int(os.getenv("MAX_TEAMS_PER_DEBATE", 3))
-    MAX_MEMBERS_PER_TEAM = int(os.getenv("MAX_MEMBERS_PER_TEAM", 2))
+    MAX_MEMBERS_PER_TEAM = int(os.getenv("MAX_MEMBERS_PER_TEAM", 5))  # Increased default to support 3-member teams
     MAX_AGENT_TOOL_STEPS = int(os.getenv("MAX_AGENT_TOOL_STEPS", 5))
     EXTENSION_STEPS = int(os.getenv("EXTENSION_STEPS", 3))
     SEMANTIC_CACHE_TTL = int(os.getenv("SEMANTIC_CACHE_TTL", 86400)) # Default 24 hours
@@ -15,12 +15,35 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/debate.db")
     REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
     QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+    
+    # LLM Provider Configuration
+    # Options: "ollama", "azure_openai", "openai"
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+    
+    # Ollama Settings
     OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
     
+    # Azure OpenAI Settings
+    AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+    AZURE_OPENAI_MODEL_DEPLOYMENT = os.getenv("AZURE_OPENAI_MODEL_DEPLOYMENT", "") # e.g. gpt-4
+    AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+    
+    # Generic OpenAI Settings (e.g. DeepSeek, OpenAI)
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4-turbo")
+    
     # Embedding Configuration (Separated)
+    # Options: "ollama", "azure_openai", "openai"
+    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
+    
     OLLAMA_EMBEDDING_HOST = os.getenv("OLLAMA_EMBEDDING_HOST", "http://ollama:11434") # Generic default
     OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest") # Generic default
+    
+    AZURE_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
+    OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 
     # Quota Limits
     SEARCH_PAID_DAILY_LIMIT = int(os.getenv("SEARCH_PAID_DAILY_LIMIT", 50))
@@ -33,6 +56,10 @@ class Config:
     CONFIG_DESCRIPTIONS = {
         "OLLAMA_HOST": "LLM 服務器地址 (例如 http://10.x.x.x:11434)",
         "OLLAMA_MODEL": "使用的 LLM 模型名稱 (例如 gpt-oss:20b)",
+        "LLM_PROVIDER": "LLM 供應商 (ollama, azure_openai, openai)",
+        "AZURE_OPENAI_ENDPOINT": "Azure OpenAI Endpoint URL",
+        "AZURE_OPENAI_API_KEY": "Azure OpenAI API Key",
+        "AZURE_OPENAI_MODEL_DEPLOYMENT": "Azure 模型部署名稱",
         "OLLAMA_EMBEDDING_HOST": "Embedding 服務器地址 (獨立設定)",
         "OLLAMA_EMBEDDING_MODEL": "Embedding 模型名稱 (例如 xitao/bge-reranker-v2-m3:latest)",
         "QDRANT_URL": "Qdrant 向量資料庫地址",

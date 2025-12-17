@@ -7,17 +7,19 @@ from sqlalchemy import or_
 class InternalTermLookup(ToolAdapter):
     name = "internal.term.lookup"
     version = "v1"
-    description = "查詢內部金融術語：支援關鍵字、分類與語言過濾，返回定義、別名與標籤。"
+    description = """查詢內部金融術語知識庫。
+    **使用時機**: 當遇到不確定的財經專有名詞，或辯論雙方對定義有歧義時使用。
+    **功能**: 支援模糊搜尋、分類篩選。返回標準定義、計算公式與別名。"""
 
     @property
     def schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "q": {"type": "string", "description": "關鍵字（名稱/別名/定義內文）"},
-                "category": {"type": "string", "description": "分類過濾"},
-                "lang": {"type": "string", "description": "語言，預設 zh-TW"},
-                "limit": {"type": "integer", "default": 20}
+                "q": {"type": "string", "description": "搜尋關鍵字 (支援術語名稱、別名或定義內容)"},
+                "category": {"type": "string", "description": "分類篩選 (如 'Valuation', 'Risk', 'Macro')"},
+                "lang": {"type": "string", "description": "語言代碼 (預設 'zh-TW')"},
+                "limit": {"type": "integer", "default": 20, "description": "返回結果數量上限"}
             },
             "required": ["q"]
         }
@@ -74,15 +76,15 @@ class InternalTermLookup(ToolAdapter):
 class InternalTermExplain(ToolAdapter):
     name = "internal.term.explain"
     version = "v1"
-    description = "根據 term_id 或名稱返回完整定義，包含公式與備註。"
+    description = "獲取特定金融術語的完整解釋，包含詳細定義、計算公式、備註與關聯資訊。"
 
     @property
     def schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "term_id": {"type": "string"},
-                "name": {"type": "string"}
+                "term_id": {"type": "string", "description": "術語唯一識別碼 (Term ID)"},
+                "name": {"type": "string", "description": "術語名稱 (精確匹配)"}
             },
             "oneOf": [
                 {"required": ["term_id"]},
