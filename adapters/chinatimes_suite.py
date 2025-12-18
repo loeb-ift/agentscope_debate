@@ -303,6 +303,10 @@ class ChinaTimesStockRTAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         # Auto-correct aliases
         if "code" not in params:
             for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
@@ -417,6 +421,10 @@ class ChinaTimesStockKlineAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         # Auto-correct aliases
         if "code" not in params:
             for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
@@ -469,7 +477,8 @@ class ChinaTimesStockKlineAdapter(BaseToolAdapter):
             # 解析數據
             # 結構: {"chart": {"data": [{"DataPrice": [...], "_ItemName": [...]}]}}
             
-            chart_data = data.get("chart", {}).get("data", [])
+            chart_dict = data.get("chart") or {}
+            chart_data = chart_dict.get("data", [])
             if not chart_data:
                 print("[DEBUG] TW K-Line empty, trying OTC...")
                 # 可能是上櫃，嘗試 stk_otc
@@ -479,9 +488,10 @@ class ChinaTimesStockKlineAdapter(BaseToolAdapter):
                     response_otc = requests.get(url_otc, timeout=10)
                     if response_otc.status_code == 200:
                         data = response_otc.json()
-                        chart_data = data.get("chart", {}).get("data", [])
+                        chart_dict = data.get("chart") or {}
+                        chart_data = chart_dict.get("data", [])
                     else:
-                         print(f"[DEBUG] OTC K-Line failed: {response_otc.status_code}")
+                        print(f"[DEBUG] OTC K-Line failed: {response_otc.status_code}")
                 except Exception as ex:
                     print(f"[DEBUG] OTC fetch error: {ex}")
 
@@ -599,6 +609,10 @@ class ChinaTimesStockNewsAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         # Auto-correct aliases
         if "code" not in params:
             for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
@@ -608,6 +622,14 @@ class ChinaTimesStockNewsAdapter(BaseToolAdapter):
                     
         if "code" not in params:
             raise ValueError("缺少必要參數: code")
+
+        # Clean Code (Remove .TW, .TWO suffixes)
+        if isinstance(params["code"], str):
+            params["code"] = params["code"].split('.')[0]
+            
+        # Clean Code (Remove .TW, .TWO suffixes)
+        if isinstance(params["code"], str):
+            params["code"] = params["code"].split('.')[0]
         if "name" not in params:
             # Try to infer name or allow partial
              raise ValueError("缺少必要參數: name")
@@ -1076,6 +1098,10 @@ class ChinaTimesStockFundamentalAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         # Auto-correct aliases
         if "code" not in params:
             for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
@@ -1084,6 +1110,10 @@ class ChinaTimesStockFundamentalAdapter(BaseToolAdapter):
                     break
         if "code" not in params:
              raise ValueError("缺少必要參數: code")
+
+        # Clean Code
+        if isinstance(params["code"], str):
+            params["code"] = params["code"].split('.')[0]
 
     def auth(self, req: Dict) -> Dict:
         return req
@@ -1149,8 +1179,15 @@ class ChinaTimesBaseFinancialAdapter(BaseToolAdapter):
         return 3600
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         if "code" not in params:
             raise ValueError("缺少必要參數: code")
+        # Clean Code
+        if isinstance(params["code"], str):
+            params["code"] = params["code"].split('.')[0]
 
     def auth(self, req: Dict) -> Dict:
         return req

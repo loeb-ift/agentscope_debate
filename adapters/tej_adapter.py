@@ -76,9 +76,11 @@ class TEJBaseAdapter(ToolAdapter):
                 params["coid"] = norm["coid"]
             except Exception as e:
                 print(f"Symbol normalization warning: {e}")
-                # Fallback to simple strip
+                # Fallback to simple strip (Handle both TWSE and OTC suffixes)
                 if params["coid"].endswith(".TW"):
                     params["coid"] = params["coid"].replace(".TW", "")
+                elif params["coid"].endswith(".TWO"):
+                    params["coid"] = params["coid"].replace(".TWO", "")
 
             # Also update filters if they use coid
             if filters and "coid" in filters and isinstance(filters["coid"], str):

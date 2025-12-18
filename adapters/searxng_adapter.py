@@ -98,12 +98,13 @@ class SearXNGAdapter(ToolAdapter):
 
             try:
                 response = requests.get(base_url, params=params, timeout=10)
+                
+                # Handle SearXNG specific errors that might come with 200 OK or 4xx
+                if response.status_code == 429 or "Too many request" in response.text:
+                    raise requests.exceptions.RequestException(f"SearXNG Rate Limit: {response.text}")
+                
                 response.raise_for_status()
                 raw_data = response.json()
-                
-                # Check for empty results if engines specified (might be blocked)
-                # But empty results are valid. The issue is when SearXNG returns error in JSON?
-                # Usually HTTP 200 with empty results.
                 
                 # 標準化數據
                 normalized_data = []
@@ -122,31 +123,53 @@ class SearXNGAdapter(ToolAdapter):
                     "citations": []
                 }
 
-            except requests.exceptions.RequestException as e:
+            except Exception as e: # Catch generic Exception to handle 429 logic raised above
                 last_exception = e
+                print(f"⚠️ SearXNG Error: {str(e)[:200]}")
+                
                 # Retry Logic
                 if attempt < max_retries:
-                    wait_time = (attempt + 1) * 2 + random.uniform(0, 1)
-                    print(f"⚠️ SearXNG Error ({e}). Retrying in {wait_time:.1f}s... (Attempt {attempt+1}/{max_retries})")
+                    wait_time = (attempt + 1) * 1.5
+                    print(f"🔄 Retrying search in {wait_time:.1f}s... (Attempt {attempt+1}/{max_retries})")
                     
-                    if engines and attempt == max_retries - 1:
-                        print("🔄 Retry strategy: Removing specific engines restriction.")
+                    # Strategy: Switch Engines on failure
+                    # If initial was default (Brave/Google), try DuckDuckGo which is more lenient
+                    if "engines" not in params or params["engines"] != "duckduckgo":
+                        print("👉 Switching engine to 'duckduckgo' for retry.")
+                        params["engines"] = "duckduckgo"
+                    elif params["engines"] == "duckduckgo":
+                        # If DDG also failed, try Qwant or Bing if configured, or remove engine constraint to let SearXNG decide
+                        print("👉 DuckDuckGo failed, removing engine constraint.")
                         params.pop("engines", None)
                         
                     time.sleep(wait_time)
                     continue
-                else:
-                    # Final Failure: Try Google CSE Fallback
-                    # Only if API key is present
-                    cse_key = os.getenv("GOOGLE_SEARCH_API_KEY") or os.getenv("GOOGLE_CSE_API_KEY")
-                    if cse_key:
-                        print("🚨 SearXNG completely failed. Fallback to Google CSE (Paid API)...")
+                
+                # Final Failure: Try Google CSE Fallback
+                cse_key = os.getenv("GOOGLE_SEARCH_API_KEY") or os.getenv("GOOGLE_CSE_API_KEY")
+                if cse_key:
+                    print("🚨 SearXNG completely failed. Fallback to Google CSE (Paid API)...")
+                    try:
+                        # Lazy import to avoid circular dep if any
+                        # Make sure adapter exists or use requests directly if simple
                         try:
-                            # Lazy import to avoid circular dep if any
                             from adapters.google_cse_adapter import GoogleCSEAdapter
                             cse = GoogleCSEAdapter()
                             return cse.invoke(q=q, limit=limit)
-                        except Exception as cse_e:
-                            print(f"❌ Google CSE Fallback failed too: {cse_e}")
+                        except ImportError:
+                            # Direct fallback implementation if adapter missing
+                            cx = os.getenv("GOOGLE_CSE_ID")
+                            if cx:
+                                url = "https://www.googleapis.com/customsearch/v1"
+                                res = requests.get(url, params={"key": cse_key, "cx": cx, "q": q})
+                                res.raise_for_status()
+                                items = res.json().get("items", [])
+                                norm = [{"title": i.get("title"), "url": i.get("link"), "snippet": i.get("snippet"), "source": "google_cse"} for i in items[:limit]]
+                                return {"data": norm, "cost": 0.01, "citations": []}
+                    except Exception as cse_e:
+                        print(f"❌ Google CSE Fallback failed: {cse_e}")
                             
-                    raise RuntimeError(f"Upstream Error after retries & fallback: {e}")
+                # Raise if all fallbacks failed
+                # Return empty result instead of crashing the worker?
+                print(f"❌ All search attempts failed. Returning empty result to prevent worker crash.")
+                return {"data": [], "error": str(e), "cost": 0}

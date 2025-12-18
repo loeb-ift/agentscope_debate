@@ -1,35 +1,86 @@
-# 投資研究報告需求映射分析
+# 投資研究報告結構與工具映射 (Investment Research Report Mapping)
 
-## 目標
-產出包含九大章節的標準化投資研究報告。
+本文件定義了標準化投資報告的章節結構，以及每個章節應使用的數據來源工具。Report Editor Agent 需嚴格遵循此結構進行內容生成。
 
-## 工具映射表
+## 報告章節定義
 
-| 章節 | 需求內容 | 主要工具 (Primary) | 備援/補充 (Secondary) | 缺口/備註 |
-| :--- | :--- | :--- | :--- | :--- |
-| **A. 封面** | 基本資訊 | `tej.company_info`, `chinatimes.stock_rt` | `yfinance.stock_info` | |
-| | 關鍵圖表 | `tej.stock_price` (K線/Vol), `tej.foreign_holdings` | `chinatimes.stock_kline` | 需輸出數據點供繪圖 |
-| **1. 概述** | 簡介/業務 | `tej.company_info` | `searxng.search` | |
-| **2. 產品** | 產品/營收比 | `tej.company_info` | `searxng.search` | TEJ 可能無細項營收比重 |
-| | 生產流程/鏈 | `internal.industry-tree` (需啟用) | `searxng.search` | 圖形需用文字描述 |
-| **3. 產業** | 趨勢/供需 | `searxng.search` | | 高度依賴搜尋與總結 |
-| | 競爭分析 | `chinatimes.sector_info` | `searxng.search` | |
-| **4. 指標** | 持股變化 | `tej.foreign_holdings`, `tej.institutional_holdings` | | 董監持股需確認工具 |
-| | PE/PB/營收 | `tej.stock_price`, `tej.monthly_revenue` | `chinatimes.financial_ratios` | |
-| **5. 同業** | 競爭者數據 | `chinatimes.sector_info` -> loop `tej.financial_summary` | | 需多重調用 |
-| **6. 財務** | 三表/比率 | `chinatimes.financial_ratios`, `chinatimes.balance_sheet`, `chinatimes.income_statement`, `chinatimes.cash_flow` | `tej.financial_summary` | 數據極為豐富 |
-| **7. 股權** | 十大股東 | **(MISSING)** | `searxng.search` | 需依賴搜尋 |
-| | 董監/經理人 | `internal.get_key_personnel` (需啟用) | `tej.company_info` (僅主要) | |
-| **8. 介紹** | 沿革/關係 | `internal.corporate_relationships` (需啟用) | `searxng.search` | |
-| **9. 新聞** | 近期報導 | `chinatimes.stock_news` | `searxng.search` | |
+### 1. 投資評等 (Investment Rating)
+- **內容**: 買進/持有/賣出建議、目標價、潛在漲幅。
+- **來源**: 綜合辯論結果、Chairman 總結。
+- **工具**: 無 (由 Agent 綜合判斷)。
 
-## 待補強工具 (Internal Tools -> Agent Tools)
-以下 Internal API 需註冊為 Agent 可用的 Tool：
-1. `internal.get_industry_tree` (獲取產業鏈上下游)
-2. `internal.get_key_personnel` (獲取董監事/經理人)
-3. `internal.get_corporate_relationships` (獲取關係企業)
+### 2. 重點摘要 (Key Highlights)
+- **內容**: 3-5 點核心投資邏輯摘要。
+- **來源**: 辯論雙方最強有力的論點。
+- **工具**: 無 (由 Agent 提煉)。
 
-## 報告生成策略
-1. **數據獲取**: Agent 需依序調用上述工具，將原始數據暫存。
-2. **圖表處理**: Agent 輸出 JSON 格式的數據 (e.g. `{"chart": "revenue", "data": [...]}`)，前端負責渲染。
-3. **文本生成**: Agent 依據 Markdown 模板填充分析內容。
+### 3. 基本資料 (Company Profile)
+- **內容**: 公司名稱、代碼、成立日期、市值、主要業務、經營團隊、十大股東。
+- **工具**:
+  - `tej.company_info` (基本資料)
+  - `internal.get_key_personnel` (經營團隊) [需新增]
+  - `tej.institutional_holdings` (法人持股/十大股東)
+  - `tej.foreign_holdings` (外資持股)
+
+### 4. 營運概況 (Operational Overview)
+- **內容**: 產品組合 (營收佔比)、銷售區域、生產基地、產能狀況。
+- **工具**:
+  - `chinatimes.stock_fundamental` (基本面概況)
+  - `tej.monthly_revenue` (月營收趨勢)
+  - `internal.get_product_mix` (產品組合 - 待實作或從年報解析)
+  - `internal.get_production_sites` (生產基地 - 待實作或從年報解析)
+
+### 5. 產業分析 (Industry Analysis)
+- **內容**: 產業地位、供應鏈位置 (上/中/下游)、競爭對手比較、產業成長率。
+- **工具**:
+  - `internal.get_industry_tree` (產業鏈位置)
+  - `chinatimes.sector_info` (產業資訊)
+  - `chinatimes.market_rankings` (同業排名)
+  - `tej.stock_price` (用於計算同業股價表現)
+
+### 6. 財務分析 (Financial Analysis)
+- **內容**:
+  - 獲利能力 (三率: 毛利率、營益率、淨利率)
+  - 成長性 (營收成長率、獲利成長率)
+  - 償債能力 (負債比、流動比)
+  - 現金流狀況 (OCF, FCF)
+- **工具**:
+  - `tej.financial_summary` (財務摘要)
+  - `chinatimes.stock_kline` (股價走勢)
+  - `tej.financial_cover_quarterly` (季財務比率)
+  - `tej.financial_cover_cumulative` (累計財務比率)
+
+### 7. 估值分析 (Valuation)
+- **內容**: 本益比 (PE)、股價淨值比 (PB)、殖利率 (Yield)、歷史區間比較。
+- **工具**:
+  - `chinatimes.stock_rt` (即時股價與 PE/PB)
+  - `tej.stock_price` (歷史 PE/PB 區間計算)
+  - `tej.offshore_fund_dividend` (若為基金)
+
+### 8. 風險分析 (Risk Analysis)
+- **內容**: 產業風險、營運風險、財務風險、政策風險。
+- **來源**: 反方 (Con Team) 的論點摘要。
+- **工具**: 無 (由 Agent 提煉)。
+
+### 9. 投資建議 (Investment Thesis)
+- **內容**: 結論、催化劑 (Catalysts)、關注時程。
+- **來源**: 綜合辯論結果。
+
+---
+
+## 圖表需求 (Chart Requirements)
+
+Agent 應在對應章節插入 `[CHART_DATA]` 區塊，前端將其渲染為圖表。
+
+1.  **股價走勢圖 (Price History)**
+    - 位置: 第 1 章或第 6 章
+    - 數據: 日 K 線 (Date, Open, High, Low, Close, Volume)
+2.  **營收趨勢圖 (Revenue Trend)**
+    - 位置: 第 4 章
+    - 數據: 月營收 (Month, Revenue, YoY)
+3.  **獲利能力趨勢 (Profitability Trend)**
+    - 位置: 第 6 章
+    - 數據: 季別三率 (Quarter, GM%, OPM%, NPM%)
+4.  **本益比河流圖 (PE Band)**
+    - 位置: 第 7 章
+    - 數據: 歷史股價與對應 PE 倍數線

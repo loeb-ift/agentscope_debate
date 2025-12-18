@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 from api.vector_store import VectorStore
 from api.config import Config
+from api.cost_utils import CostService
 
 # Configuration Constants
 REQUEST_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
@@ -178,6 +179,13 @@ class OpenAIProvider(LLMProvider):
         payload = self._prepare_payload(messages, tools, model)
         headers = self._get_headers()
         
+        # Debug Log
+        safe_headers = headers.copy()
+        if "api-key" in safe_headers:
+            safe_headers["api-key"] = "***"
+        print(f"DEBUG: Azure Request URL: {url}")
+        print(f"DEBUG: Azure Headers: {safe_headers}")
+        
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
@@ -333,13 +341,16 @@ async def _update_semantic_cache(cache_query: str, content: str, model: str, con
     except Exception as e:
         print(f"Failed to queue cache update: {e}")
 
-async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: str = None, tools: List[Dict] = None) -> str:
+async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: str = None, tools: List[Dict] = None, debate_id: str = None) -> str:
     """Internal Async Implementation"""
     provider = get_llm_provider()
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
+    
+    # Extract input text for cost calc
+    input_text = json.dumps(messages, ensure_ascii=False)
 
     async with _semaphore:
         try:
@@ -348,6 +359,17 @@ async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: st
             content = await provider.chat_completion(messages, tools, model)
             elapsed = time.time() - start_time
             print(f"DEBUG: LLM (Async) finished in {elapsed:.2f}s")
+            
+            # --- Cost Recording ---
+            if debate_id:
+                asyncio.create_task(CostService.record_usage(
+                    debate_id=debate_id,
+                    model=model or Config.LLM_PROVIDER, # Use provider name as model proxy if model not passed
+                    input_text=input_text,
+                    output_text=content
+                ))
+            # ---------------------
+            
             return content
         except Exception as e:
              if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 400:
@@ -358,6 +380,11 @@ async def _call_llm_async_impl(prompt: str, system_prompt: str = None, model: st
 async def call_llm_async(prompt: str, system_prompt: str = None, model: str = None, context_tag: str = None, tools: List[Dict] = None) -> str:
     """Async Wrapper with Semantic Caching & Retry"""
     
+    # Extract debate_id from context_tag (Format: "debate_id:agent_name:...")
+    debate_id = None
+    if context_tag and ":" in context_tag:
+        debate_id = context_tag.split(":")[0]
+
     # Semantic Cache Logic
     cache_query = f"System: {system_prompt}\nUser: {prompt}"
     skip_cache = False
@@ -404,7 +431,7 @@ async def call_llm_async(prompt: str, system_prompt: str = None, model: str = No
     _semantic_cache_buffer.stats["misses"] += 1
 
     try:
-        content = await _call_llm_async_impl(prompt, system_prompt, model, tools=tools)
+        content = await _call_llm_async_impl(prompt, system_prompt, model, tools=tools, debate_id=debate_id)
         if content:
             asyncio.create_task(_update_semantic_cache(cache_query, content, model, context_tag))
         return content

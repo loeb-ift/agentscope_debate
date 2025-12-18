@@ -13,3 +13,4 @@ PyYAML
 httpx
 tenacity
 qdrant-client
+tiktoken

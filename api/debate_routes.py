@@ -233,15 +233,32 @@ def create_and_launch_debate(config: schemas.DebateConfigCreate, db: Session = D
     }
 
 @router.get("/api/v1/replays")
-def list_replays():
-    """列出所有 Markdown 辯論報告"""
+async def list_replays(limit: int = 50):
+    """列出所有 Markdown 辯論報告 (按檔名時間戳排序)"""
+    import asyncio
     report_dir = "data/replays"
     if not os.path.exists(report_dir):
         return []
     
-    files = glob.glob(os.path.join(report_dir, "*.md"))
-    # Sort by modification time desc
-    files.sort(key=os.path.getmtime, reverse=True)
+    # Run I/O in thread pool to avoid blocking event loop
+    loop = asyncio.get_running_loop()
+    
+    def _scan_files():
+        files = glob.glob(os.path.join(report_dir, "*.md"))
+        
+        def get_sort_key(filepath):
+            try:
+                filename = os.path.basename(filepath)
+                # Format: topic_YYYYMMDD_HHMMSS.md
+                ts_part = filename.rsplit('.', 1)[0].rsplit('_', 2)[-2:]
+                return "_".join(ts_part)
+            except:
+                return str(os.path.getmtime(filepath))
+                
+        files.sort(key=get_sort_key, reverse=True)
+        return files[:limit] # Limit results
+
+    files = await loop.run_in_executor(None, _scan_files)
     
     replays = []
     for f in files:

@@ -8,6 +8,7 @@ services:
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - API_URL=http://api:8000/api/v1
+      - TZ=Asia/Taipei
     depends_on:
       - api
     volumes:
@@ -31,6 +32,7 @@ services:
       - TEJ_API_KEY=${TEJ_API_KEY}
       - ENABLE_CHINATIMES_TOOLS=${ENABLE_CHINATIMES_TOOLS}
       - PYTHONPATH=/app
+      - TZ=Asia/Taipei
     depends_on:
       - redis
       - qdrant
@@ -56,6 +58,7 @@ services:
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_HOST=http://searxng:8080
       - PYTHONPATH=/app
+      - TZ=Asia/Taipei
     depends_on:
       - redis
       - searxng

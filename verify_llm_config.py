@@ -3,6 +3,7 @@ import os
 from api.config import Config
 from worker.llm_utils import call_llm_async, get_llm_provider
 from api.vector_store import VectorStore
+from api.redis_client import get_redis_client
 
 async def verify_llm():
     print("=== LLM Configuration Verification ===")
@@ -34,7 +35,8 @@ async def verify_llm():
         
         # Force skip cache to test real connection
         import time
-        response = await call_llm_async(prompt, context_tag=f"verify_{time.time()}")
+        debate_id = "verify_cost_test"
+        response = await call_llm_async(prompt, context_tag=f"{debate_id}:test_agent:{time.time()}")
         
         print(f"\nResponse received:")
         print(f"'{response}'")
@@ -44,6 +46,16 @@ async def verify_llm():
         else:
             print("\n✅ LLM Verification Successful!")
             
+            # Verify Cost Recording
+            print("\n--- Verifying Cost Recording ---")
+            await asyncio.sleep(1) # Wait for async task
+            redis = get_redis_client()
+            usage = redis.hgetall(f"debate:{debate_id}:usage")
+            if usage:
+                print(f"✅ Cost Recorded: {usage}")
+            else:
+                print("⚠️ Cost NOT found in Redis (might be delayed or failed)")
+
     except Exception as e:
         print(f"\n❌ Exception occurred: {e}")
 

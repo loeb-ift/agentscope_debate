@@ -262,11 +262,20 @@ class DebateCycle:
         try:
             # Simple Jury Prompt
             template = PromptService.get_prompt(db, "debate.jury_system")
-            if not template: template = "You are a fair debate judge."
+            if not template: template = "你是公正的辯論評審團。請使用繁體中文進行評估。"
             system_prompt = template
 
             user_template = PromptService.get_prompt(db, "debate.jury_user")
-            if not user_template: user_template = "Evaluate this conclusion: {conclusion}"
+            if not user_template:
+                user_template = """
+請針對以下辯論結論進行評估：
+
+辯題：{topic}
+最終結論：
+{conclusion}
+
+請給出評分 (0-100) 與具體評語。評語必須使用繁體中文。
+"""
             user_prompt = user_template.format(conclusion=final_conclusion, topic=self.topic)
         finally:
             db.close()
@@ -279,12 +288,12 @@ class DebateCycle:
             print(f"Jury evaluation failed: {e}")
             return f"Jury evaluation failed: {str(e)}"
 
-    def _save_report_to_file(self, conclusion: str, jury_report: str = None, start_time: datetime = None, end_time: datetime = None):
+    def _save_report_to_file(self, conclusion: str, jury_report: str = None, investment_report: str = None, start_time: datetime = None, end_time: datetime = None):
         """
         將辯論過程保存為 Markdown 文件。
         """
         import re
-        from datetime import datetime
+        from datetime import datetime, timedelta, timezone
         
         report_dir = "data/replays"
         os.makedirs(report_dir, exist_ok=True)
@@ -293,8 +302,10 @@ class DebateCycle:
         safe_topic = re.sub(r'[<>:"/\\|?*]', '', self.topic)
         safe_topic = safe_topic.replace(' ', '_')[:50]  # 限制長度
         
-        # 生成時間戳（可讀格式）
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 生成時間戳（可讀格式，強制 GMT+8）
+        tz_taipei = timezone(timedelta(hours=8))
+        now = datetime.now(timezone.utc).astimezone(tz_taipei)
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
         
         # 組合檔名：題目_時間.md
         filename = f"{safe_topic}_{timestamp}.md"
@@ -303,7 +314,7 @@ class DebateCycle:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"# 辯論報告：{self.topic}\n\n")
             f.write(f"**ID**: {self.debate_id}\n")
-            f.write(f"**Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"**Date**: {now.strftime('%Y-%m-%d %H:%M:%S')} (GMT+8)\n\n")
             
             f.write("## 🏆 最終結論\n\n")
             f.write(f"{conclusion}\n\n")
@@ -312,6 +323,12 @@ class DebateCycle:
                 f.write("## ⚖️ 評審團評估報告\n\n")
                 f.write(f"{jury_report}\n\n")
             
+            if investment_report:
+                f.write("---\n\n")
+                f.write("# 📑 深度投資研究報告 (Investment Report)\n\n")
+                f.write(f"{investment_report}\n\n")
+                f.write("---\n\n")
+
             f.write("## 📝 辯論過程記錄\n\n")
             for item in self.full_history:
                 role = item.get("role", "Unknown")
@@ -350,8 +367,6 @@ class DebateCycle:
         await self._check_db_date_async()
 
         # 0. 賽前分析
-        # [Phase 18] Database Handshake
-        await self._check_db_date_async()
 
         # Check Task LTM for similar past debates
         # [OPTIONAL] Disabled to avoid cold-start issues if not required
@@ -384,6 +399,10 @@ class DebateCycle:
         summary = self.analysis_result.get('step5_summary', '無')
         self.chairman.speak(f"賽前分析完成。戰略摘要：{summary}")
         self._publish_log("Chairman (Analysis)", f"賽前分析完成。\n戰略摘要：{summary}")
+
+        # [New] Neutral Fact-Check (Double Validation)
+        # 利用中立團隊進行第二道事實核查，確保 Chairman 的 Decree (題目鎖定) 無誤
+        await self._conduct_neutral_fact_check(decree)
         
         self._publish_progress(30, "分析完成，準備 Agent 工具...", "tool_selection")
         
@@ -430,6 +449,9 @@ class DebateCycle:
         # 5. Jury 評估
         jury_report = self._run_jury_evaluation(final_conclusion)
 
+        # 6. 生成正式投資報告 (Report Editor)
+        investment_report = await self._generate_investment_report(self.rounds_data, final_conclusion)
+
         # Record outcome to Task LTM
         # [OPTIONAL] Disabled as debates are independent and history is not required
         # task_mem = ReMeTaskLongTermMemory()
@@ -437,7 +459,7 @@ class DebateCycle:
         
         end_time = datetime.now()
         # Save to File (Markdown Report)
-        self._save_report_to_file(final_conclusion, jury_report, start_time, end_time)
+        self._save_report_to_file(final_conclusion, jury_report, investment_report, start_time, end_time)
 
         print(f"Debate '{self.debate_id}' has ended.")
         self._publish_log("System", f"Debate '{self.debate_id}' has ended.")
@@ -469,16 +491,34 @@ class DebateCycle:
         sem_total = sem_hits + sem_misses
         sem_hit_rate = (sem_hits / sem_total * 100) if sem_total > 0 else 0
         
+        # [Cost Stats] Retrieve from Redis
+        try:
+            usage = self.redis_client.hgetall(f"debate:{self.debate_id}:usage")
+            total_tokens = int(usage.get("total_tokens", 0))
+            search_count = int(usage.get("search_count", 0))
+            # Redis cost only tracks LLM cost via CostService
+            llm_cost = float(usage.get("total_cost", 0.0))
+            
+            # Combine tool cost
+            total_cost = llm_cost + self.tool_stats['estimated_cost']
+        except:
+            total_tokens = 0
+            search_count = 0
+            total_cost = self.tool_stats['estimated_cost'] # Fallback to tool cost only
+
         avg_latency = (self.tool_stats["total_time"] / self.tool_stats["count"]) if self.tool_stats["count"] > 0 else 0
         
         stats_msg = f"📊 Cache Stats: WM Hit {hit_rate:.1f}% | Sem Hit {sem_hit_rate:.1f}% | Saved Calls: {cache_stats['wm_hits'] + sem_hits}"
-        perf_msg = f"⚡ Perf: Avg Tool Latency {avg_latency:.2f}s | Est Cost: ${self.tool_stats['estimated_cost']:.2f}"
+        perf_msg = f"⚡ Perf: Avg Tool Latency {avg_latency:.2f}s | LLM: {total_tokens} toks | Search: {search_count} calls | Total: ${total_cost:.4f}"
         
         detailed_stats = {
             "hippocampus_hit_rate": hit_rate,
             "semantic_cache_hit_rate": sem_hit_rate,
             "api_calls_saved": cache_stats['wm_hits'] + sem_hits,
-            "total_api_cost": self.tool_stats["estimated_cost"],
+            "tool_api_cost": self.tool_stats["estimated_cost"],
+            "search_count": search_count,
+            "total_cost": total_cost,
+            "total_llm_tokens": total_tokens,
             "qdrant_writes": cache_stats['ltm_writes'],
             "avg_tool_latency": avg_latency
         }
@@ -498,8 +538,276 @@ class DebateCycle:
             "rounds_data": self.rounds_data,
             "analysis": self.analysis_result,
             "final_conclusion": final_conclusion,
-            "jury_report": jury_report
+            "jury_report": jury_report,
+            "investment_report": investment_report
         }
+
+    async def _generate_investment_report(self, rounds_data: List[Dict], final_conclusion: str) -> str:
+        """
+        調用 Report Editor Agent 生成結構化投資報告
+        """
+        self._publish_log("System", "📑 正在生成深度投資研究報告 (Report Generation)...")
+        self._publish_progress(98, "正在撰寫投資報告...", "report")
+        
+        # 1. Prepare Context
+        # Flatten history for context
+        full_context = ""
+        for r in rounds_data:
+            round_log = r.get('log', [])
+            for entry in round_log:
+                full_context += f"[{entry['role']}]: {entry['content']}\n\n"
+        
+        full_context += f"[Chairman Conclusion]: {final_conclusion}\n"
+        
+        # 2. Setup Agent
+        # Create a temporary ReportEditor agent instance
+        
+        # Define a simple agent class compatible with AgentBase
+        class ReportAgent(AgentBase):
+            def __init__(self, name: str, role: str, system_prompt: str):
+                super().__init__(name=name, sys_prompt=system_prompt) # Try passing standard args if supported, or just init
+                self.name = name
+                self.role = role
+                self.system_prompt = system_prompt
+        
+        # Load system prompt
+        db = SessionLocal()
+        try:
+            report_agent_model = db.query(models.Agent).filter(models.Agent.role == "report_editor").first()
+            
+            if not report_agent_model:
+                print("Warning: Report Editor agent not found in DB, using ad-hoc.")
+                sys_prompt = "你是專業投資報告主筆..."
+                # Fallback instantiation
+                try:
+                    agent = ReportAgent(name="Report Editor", role="report_editor", system_prompt=sys_prompt)
+                except TypeError:
+                    # Fallback for AgentBase without args
+                    class SimpleAgent:
+                        def __init__(self, name, role, system_prompt):
+                            self.name = name
+                            self.role = role
+                            self.system_prompt = system_prompt
+                    agent = SimpleAgent(name="Report Editor", role="report_editor", system_prompt=sys_prompt)
+            else:
+                # Use robust instantiation
+                try:
+                    agent = ReportAgent(
+                        name=report_agent_model.name,
+                        role=report_agent_model.role,
+                        system_prompt=report_agent_model.system_prompt
+                    )
+                except TypeError:
+                     # If AgentBase init fails, use Simple Mock
+                    class SimpleAgent:
+                        def __init__(self, name, role, system_prompt):
+                            self.name = name
+                            self.role = role
+                            self.system_prompt = system_prompt
+                    agent = SimpleAgent(
+                        name=report_agent_model.name,
+                        role=report_agent_model.role,
+                        system_prompt=report_agent_model.system_prompt
+                    )
+                
+        finally:
+            db.close()
+            
+        # 3. Equip Tools
+        # Force equip Strategic ToolSet or Report tools
+        # We can reuse _agent_select_tools_async logic, but better to force equip specific report tools to ensure coverage
+        report_tools = [
+            # Basic
+            "tej.company_info", "tej.financial_summary", "tej.stock_price",
+            "chinatimes.stock_fundamental", "internal.get_industry_tree", "searxng.search",
+            # Financial Statements (Detailed)
+            "chinatimes.balance_sheet", "chinatimes.income_statement",
+            "chinatimes.cash_flow", "chinatimes.financial_ratios"
+        ]
+        self.agent_tools_map[agent.name] = report_tools
+        
+        # 4. Execute
+        # We reuse _agent_turn_async to leverage the tool-use loop!
+        # But _agent_turn_async constructs its own prompt. We need to override or inject the instruction.
+        # _agent_turn_async uses `debater.tool_instruction`.
+        # We can trick it by setting a special side? No.
+        # We will manually run the loop logic here simplified, or modify _agent_turn_async to accept custom prompt.
+        
+        # Easier: Just use _agent_turn_async but with a "special" round number or side that triggers different prompt logic?
+        # OR: Duplicate the loop logic here for specialized reporting.
+        # Let's Duplicate simplified loop for safety and customization.
+        
+        system_prompt = agent.system_prompt
+        user_prompt = f"""
+請根據以下辯論記錄，撰寫一份完整的投資研究報告。
+報告必須包含：投資評等、重點摘要、基本資料、營運概況、產業分析、財務分析、估值分析、風險分析、投資建議。
+請務必使用工具補充辯論中缺失的數據（如營收佔比、最新股價、PE Band）。
+輸出格式必須包含 [CHART_DATA] JSON 區塊。
+
+辯論記錄：
+{full_context}
+"""
+        
+        # === Report Generation Loop (Simplified) ===
+        max_steps = 5
+        current_step = 0
+        current_prompt = user_prompt
+        
+        final_report = ""
+        
+        # Equip tools for Ollama
+        ollama_tools = []
+        for name in report_tools:
+            try:
+                t_data = tool_registry.get_tool_data(name)
+                ollama_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": t_data.get('description', ''),
+                        "parameters": t_data.get('schema', {})
+                    }
+                })
+            except:
+                pass
+
+        while current_step < max_steps:
+            current_step += 1
+            self._publish_log("Report Editor", f"正在撰寫報告 (Step {current_step})...")
+            
+            response = await call_llm_async(
+                current_prompt,
+                system_prompt=system_prompt,
+                context_tag=f"{self.debate_id}:ReportEditor",
+                tools=ollama_tools
+            )
+            
+            # Check tool call
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            is_tool = False
+            if json_match:
+                try:
+                    tool_call = json.loads(json_match.group(0))
+                    if "tool" in tool_call and "params" in tool_call:
+                        is_tool = True
+                        t_name = tool_call["tool"]
+                        t_params = tool_call["params"]
+                        
+                        self._publish_log("Report Editor", f"調用工具補充數據: {t_name}")
+                        
+                        # Execute
+                        from worker.tool_invoker import call_tool
+                        loop = asyncio.get_running_loop()
+                        res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                        
+                        # Update prompt
+                        current_prompt = f"工具 {t_name} 結果：\n{json.dumps(res, ensure_ascii=False, indent=2)}\n\n請繼續撰寫報告。"
+                        continue
+                except:
+                    pass
+            
+            if not is_tool:
+                # Final result
+                final_report = response
+                break
+        
+        self._publish_log("Report Editor", "報告撰寫完成。")
+        return final_report
+
+    async def _conduct_neutral_fact_check(self, decree: Dict[str, Any]):
+        """
+        讓中立團隊 (Neutral Team) 驗證 Chairman 的題目鎖定 (Decree) 是否符合事實。
+        若發現重大出入（如產業錯誤），嘗試修正。
+        """
+        neutral_team = next((t for t in self.teams if t.get('side') == 'neutral'), None)
+        if not neutral_team or not decree:
+            return
+
+        self._publish_log("System", "⚖️ 啟動中立團隊事實核查 (Neutral Fact-Check)...")
+        agent = neutral_team['agents'][0] # Pick the first neutral agent
+        
+        # 1. Equip Tools (Ad-hoc)
+        # Neutral needs search & basic tools
+        tools = ["searxng.search", "tej.company_info", "chinatimes.stock_fundamental"]
+        # Assuming we can use these tools directly via call_tool wrapper or just LLM knowledge if strong enough?
+        # Better to use tools. We can reuse _agent_turn_async logic but with a specific prompt.
+        
+        # We need to temporarily set tools for this agent if not set
+        if agent.name not in self.agent_tools_map:
+            self.agent_tools_map[agent.name] = tools
+
+        # 2. Prompt
+        check_prompt = f"""
+【系統任務：事實核查】
+主席對辯題進行了以下鎖定 (Decree)：
+- 主體: {decree.get('subject')}
+- 代碼: {decree.get('code')}
+- 產業: {decree.get('industry')}
+
+請你使用工具驗證上述資訊是否正確。
+特別檢查「產業」是否符合該公司的實際業務。
+例如：森鉅 (8942) 是金屬/建材，若主席說是電子，請指出錯誤。
+
+輸出格式：
+若正確，輸出 "PASS"。
+若錯誤，請輸出 "FAIL: [修正後的產業/代碼]"。
+"""
+        # 3. Execute
+        # Reuse _agent_turn_async but we need to inject this prompt.
+        # Since _agent_turn_async uses a fixed prompt template, we might need a specialized method or trick it.
+        # Let's use call_llm_async directly with tools manually to keep it isolated.
+        
+        from worker.tool_invoker import call_tool
+        
+        # Construct tool definitions for LLM
+        ollama_tools = []
+        for t_name in tools:
+            try:
+                t_data = tool_registry.get_tool_data(t_name)
+                ollama_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t_name,
+                        "description": t_data.get('description', ''),
+                        "parameters": t_data.get('schema', {})
+                    }
+                })
+            except: pass
+
+        # Simple Loop (1 turn)
+        sys_p = "你是公正的事實查核員。"
+        response = await call_llm_async(check_prompt, system_prompt=sys_p, tools=ollama_tools, context_tag=f"{self.debate_id}:NeutralCheck")
+        
+        # Handle Tool Call if any
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            try:
+                tool_call = json.loads(json_match.group(0))
+                if "tool" in tool_call:
+                    t_name = tool_call["tool"]
+                    t_params = tool_call["params"]
+                    self._publish_log(f"{agent.name} (Fact-Check)", f"調用工具驗證: {t_name}")
+                    
+                    loop = asyncio.get_running_loop()
+                    res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                    
+                    # Second pass with tool result
+                    response = await call_llm_async(
+                        f"工具結果：{json.dumps(res, ensure_ascii=False)[:500]}\n請給出最終判斷 (PASS/FAIL)。",
+                        system_prompt=sys_p,
+                        context_tag=f"{self.debate_id}:NeutralCheck:Res"
+                    )
+            except: pass
+
+        if "FAIL" in response:
+            self._publish_log("System", f"⚠️ 中立核查發現潛在錯誤：{response}")
+            # [Auto-Correction] If Neutral provides a correction, apply it?
+            # Parsing "FAIL: [Correct]" is hard.
+            # For now, just Log Warning.
+            # Or append to history so everyone knows.
+            self.history.append({"role": "System (Fact-Check Warning)", "content": f"中立團隊對題目鎖定提出異議：{response}。請各方辯手注意核實。"})
+        else:
+            self._publish_log("System", "✅ 中立事實核查通過。")
 
     async def _check_db_date_async(self):
         """
@@ -1372,8 +1680,19 @@ class DebateCycle:
                                 # Simple Cost Model
                                 cost = 0.0
                                 if tool_name.startswith("tej."): cost = 0.03 # $0.03 per TEJ call
-                                elif tool_name.startswith("searxng."): cost = 0.00 # Free
                                 elif tool_name.startswith("financial."): cost = 0.01 # Auditor
+                                
+                                # Google Search Cost Logic
+                                if "search" in tool_name or "google" in tool_name:
+                                    # Increment search count in Redis
+                                    search_key = f"debate:{self.debate_id}:usage"
+                                    self.redis_client.hincrby(search_key, "search_count", 1)
+                                    
+                                    # Cost calculation (Simplified: assume > 2M calls globally or just track usage)
+                                    # $3 per 1M = $0.000003 per call
+                                    # For this debate, we track estimated cost
+                                    cost = 0.000003
+                                
                                 self.tool_stats["estimated_cost"] += cost
                                 
                                 # 3. Store in Working Memory

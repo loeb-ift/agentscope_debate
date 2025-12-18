@@ -91,12 +91,16 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
 
         # 2. Prompt for Investigation
         prompt = f"""
-請對辯題「{topic}」進行背景調查。
-特別注意識別題目中的關鍵實體（如公司名稱、股票代碼、專有名詞）。
-如果是不清楚的公司（如「敦陽」），請使用工具搜尋其全名、代碼及主要業務。
-請使用工具獲取客觀數據。
+請對辯題「{topic}」進行嚴格的背景事實調查 (Fact-Checking)。
 
-調查結束後，請總結你獲得的關鍵背景資訊（公司全名、代碼、產業地位等）。
+**核心任務**：
+1. **識別實體**：找出公司全名與股票代碼 (e.g., 森鉅 -> 8942)。
+2. **產業定位**：確認其主要產品與所屬產業。
+   - ⚠️ 注意：不要依賴直覺猜測產業。若 TEJ/ChinaTimes 查無資料，**必須**使用 `searxng.search` 搜尋「{{公司名}} 做什麼」或「{{公司名}} 產品」。
+   - 範例：森鉅 (8942) 是做「金屬複合板/建材」，絕非電子股。請務必核實。
+3. **數據檢核**：確認是否能獲取財務數據。若無法獲取，請標記為「數據缺失」。
+
+調查結束後，請總結你獲得的關鍵背景資訊（公司全名、代碼、確切產業、主要產品）。
 """
         # 3. Execution Loop (Simple 1-turn or 2-turn)
         context = []
@@ -505,61 +509,70 @@ JSON 必須包含以下欄位：
         from worker.tool_invoker import call_tool
         loop = asyncio.get_running_loop()
 
-        # Strategy 1: Verify Code if exists
+        # Strategy 1: Verify Code AND Correct Name if exists
         verified = False
         if is_valid(code):
-            # 1.1 Priority: Try TWSE API (Official Source)
+            # 1.1 Priority: ChinaTimes Fundamental (Best for Chinese Name & Sector)
             try:
-                # Use current date to check if stock is active/exists
-                from worker.tool_config import CURRENT_DATE
-                # twse.stock_day usually needs 'symbol' and optional 'date' (defaults to current month if not provided)
-                # We'll provide a date to be safe.
-                res_twse = await loop.run_in_executor(None, call_tool, "twse.stock_day", {"symbol": code, "date": CURRENT_DATE})
-                
-                # Check for valid data
-                data_twse = res_twse.get("data") or res_twse.get("results")
-                # If we get a list of daily prices, the code is valid.
-                if data_twse and isinstance(data_twse, list) and len(data_twse) > 0:
-                    self._publish_log(debate_id, f"✅ (TWSE) 驗證成功：{code} -> {final_decree['subject']}")
-                    verified = True
+                res_ct = await loop.run_in_executor(None, call_tool, "chinatimes.stock_fundamental", {"code": code})
+                data_ct = res_ct.get("data")
+                if data_ct:
+                    # Expecting WantRich API: { "Code": "2330", "Name": "台積電", "SectorName": "半導體業" ... }
+                    ct_name = data_ct.get("Name")
+                    ct_sector = data_ct.get("SectorName") or data_ct.get("Industry")
+                    
+                    if ct_name:
+                        # [CORRECTION] Force update subject name from official source
+                        final_decree["subject"] = ct_name
+                        self._publish_log(debate_id, f"✅ (ChinaTimes) 名稱校正：{code} -> {ct_name}")
+                        verified = True
+                        
+                    if ct_sector:
+                        final_decree["industry"] = ct_sector
+                        self._publish_log(debate_id, f"🏭 產業確認 (ChinaTimes)：{ct_sector}")
             except Exception as e:
-                # Log but don't fail, fallback to TEJ
-                # print(f"TWSE verification warning: {e}")
+                # print(f"ChinaTimes verification warning: {e}")
                 pass
 
-            # 1.2 Priority: Try ChinaTimes Fundamental (Entity & Industry Grounding)
+            # 1.2 Priority: TEJ Company Info (Good for Name & Sector)
             if not verified:
                 try:
-                    # Try ChinaTimes Fundamental
-                    # Note: Using 'chinatimes.stock_fundamental' which might need to be registered or checked if enabled
-                    # We assume it's available if chinatimes suite is enabled.
-                    res_ct = await loop.run_in_executor(None, call_tool, "chinatimes.stock_fundamental", {"code": code})
-                    data_ct = res_ct.get("data")
-                    if data_ct:
-                        # Check for valid company name or sector info
-                        # Structure depends on API, assuming standard fields or we look for 'SectorName' / 'CompanyName'
-                        # Based on typical WantRich API: { "Code": "2330", "Name": "台積電", "SectorName": "半導體業", ... }
+                    res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
+                    data = res.get("results") or res.get("data")
+                    if data and isinstance(data, list) and len(data) > 0:
+                        row = data[0]
+                        # TEJ fields: cname (Chinese Name), ename (English Name), ind_name (Industry)
+                        official_name = row.get("cname") or row.get("ename")
                         
-                        ct_name = data_ct.get("Name")
-                        ct_sector = data_ct.get("SectorName") or data_ct.get("Industry")
-                        
-                        if ct_name:
-                            final_decree["subject"] = ct_name
-                            
-                        if ct_sector:
-                            final_decree["industry"] = ct_sector
-                            self._publish_log(debate_id, f"🏭 產業確認 (ChinaTimes)：{ct_sector}")
-                            
-                        if ct_name:
-                            self._publish_log(debate_id, f"✅ (ChinaTimes) 驗證成功：{code} -> {ct_name}")
+                        if official_name:
+                            final_decree["subject"] = official_name
+                            self._publish_log(debate_id, f"✅ (TEJ) 名稱校正：{code} -> {official_name}")
                             verified = True
+                        
+                        ind_name = row.get("ind_name") or row.get("tej_ind_name")
+                        if ind_name:
+                            final_decree["industry"] = ind_name
+                            self._publish_log(debate_id, f"🏭 產業確認 (TEJ)：{ind_name}")
                 except Exception as e:
-                    # Log but continue to TEJ fallback
-                    # print(f"ChinaTimes verification warning: {e}")
+                    # print(f"TEJ verification warning: {e}")
                     pass
 
-            # 1.3 Fallback: Try TEJ Company Info
+            # 1.3 Fallback: TWSE (Checks existence only, weak name correction)
             if not verified:
+                try:
+                    from worker.tool_config import CURRENT_DATE
+                    res_twse = await loop.run_in_executor(None, call_tool, "twse.stock_day", {"symbol": code, "date": CURRENT_DATE})
+                    data_twse = res_twse.get("data") or res_twse.get("results")
+                    
+                    # If we get price data, code exists. But we can't confirm name.
+                    if data_twse and isinstance(data_twse, list) and len(data_twse) > 0:
+                        # We assume the user/LLM provided name is "okay" if we can't correct it,
+                        # OR we try to fetch name from another specific TWSE tool if available.
+                        # For now, mark as verified existence but warn about name.
+                        self._publish_log(debate_id, f"✅ (TWSE) 代碼存在確認：{code} (名稱未校正)")
+                        verified = True
+                except Exception as e:
+                    pass
                 try:
                     # Try TEJ Company Info
                     res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
@@ -699,19 +712,99 @@ JSON 必須包含以下欄位：
         questions_text = await call_llm_async(plan_prompt, system_prompt="你是專業投資顧問。", context_tag=f"{debate_id}:Chairman:AdvicePlan")
         questions = [q.strip() for q in questions_text.split('\n') if q.strip()]
         
-        # 2. Execute Research (Parallel)
+        # 2. Execute Research (Smart Tool Selection)
         research_results = []
         
-        # Use simple search tool for now. In future, we can ask LLM to pick tools.
+        # Prepare Tools (Prioritize High-Value Paid Tools)
+        target_tool_names = [
+            # Premium Paid Tools (ChinaTimes & Google)
+            "chinatimes.news_search",
+            "chinatimes.stock_fundamental",
+            "chinatimes.financial_ratios",
+            "google.search", # Paid/Official Google Search
+            
+            # Standard/Trial Tools (TEJ)
+            "tej.company_info",
+            "tej.stock_price",
+            
+            # Fallback
+            "searxng.search"
+        ]
+        
+        research_tools = []
+        for name in target_tool_names:
+            try:
+                tool_data = tool_registry.get_tool_data(name)
+                # Ensure valid schema
+                schema = tool_data.get('schema', {"type": "object", "properties": {}})
+                if isinstance(schema, dict):
+                     if "type" not in schema: schema["type"] = "object"
+                
+                desc = tool_data.get('description', '')
+                if isinstance(desc, dict): desc = desc.get('description', '')
+                
+                research_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": desc,
+                        "parameters": schema
+                    }
+                })
+            except:
+                pass
+
         from worker.tool_invoker import call_tool
         loop = asyncio.get_running_loop()
         
         for q in questions[:3]: # Limit to 3 queries
             try:
                 self._publish_log(debate_id, f"🔎 延伸調查：{q}")
-                # We use searxng for broad info
-                res = await loop.run_in_executor(None, call_tool, "searxng.search", {"q": q, "num_results": 2})
-                research_results.append(f"Q: {q}\nA: {str(res)[:500]}")
+                
+                # Ask LLM to pick the best tool for this question
+                selection_prompt = f"""
+                任務：回答延伸調查問題「{q}」。
+                
+                請優先使用【付費高階工具】(Google Search, ChinaTimes) 來獲取最準確的資訊。
+                TEJ 為試用版工具，僅在其他工具無法獲取數據時作為輔助使用。
+
+                工具選擇指南：
+                - **查權威新聞/輿論** -> `chinatimes.news_search` (首選), `google.search` (付費高精準)
+                - **查基本面/財務數據** -> `chinatimes.stock_fundamental`, `chinatimes.financial_ratios` (首選)
+                - **查廣泛外部資訊** -> `google.search`
+                - **輔助數據 (若上述皆無)** -> `tej.company_info`, `tej.stock_price`
+                """
+                
+                response = await call_llm_async(
+                    selection_prompt,
+                    system_prompt="你是首席研究員，請優先使用高成本但高準確度的付費工具 (ChinaTimes, Google)。",
+                    tools=research_tools,
+                    context_tag=f"{debate_id}:Chairman:ResearchExec"
+                )
+                
+                # Parse Tool Call
+                tool_output = "No tool used."
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    try:
+                        tool_call = json.loads(json_match.group(0))
+                        if "tool" in tool_call and "params" in tool_call:
+                            t_name = tool_call["tool"]
+                            t_params = tool_call["params"]
+                            
+                            self._publish_log(debate_id, f"🛠️ 調用工具 ({t_name})...")
+                            res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                            tool_output = str(res)[:800] # Increase limit for rich data
+                    except Exception as ex:
+                        tool_output = f"Tool execution error: {ex}"
+                else:
+                    # Fallback to search if no tool selected (sometimes LLM just talks)
+                    if "search" not in response.lower(): # Avoid re-searching if it was a search intent
+                         res = await loop.run_in_executor(None, call_tool, "searxng.search", {"q": q})
+                         tool_output = str(res)[:500]
+
+                research_results.append(f"Q: {q}\nResult: {tool_output}")
+                
             except Exception as e:
                 print(f"Extended research failed for '{q}': {e}")
                 
@@ -768,24 +861,33 @@ JSON 必須包含以下欄位：
         ### 你的任務
         請扮演公正、權威的辯論主席，生成一份結構清晰的 Markdown 報告，包含以下四個章節：
 
-        ## 1. 戰略對齊檢查 (Strategic Alignment)
-        *   回顧戰略手卡：雙方是否討論了「核心戰場」？
-        *   是否回答了「關鍵檢驗點」？
-        *   評價本次辯論的聚焦程度。
+        ## 1. 戰略對齊與雙方觀點 (Strategic Alignment & Counterpoints)
+        *   回顧戰略手卡：是否聚焦核心戰場？
+        *   **必須包含反方觀點**：不能僅呈現正方主張。請補充至少一段反方的有力質疑（例如：新增成分股的風險、股息稀釋效應等），完整呈現交鋒。
 
-        ## 2. 證據效力審查 (Evidence Review)
-        *   **反向證偽 (Falsifiability Check)**：
-            *   **強證據**：指出哪些論點提供了可查證的 URL/Database ID (Tier 1/2)。若無反證，判定為真。
-            *   **弱證據**：指出哪些論點僅有文字敘述 (Tier 3/4)，無連結或來源。判定為「待證實」。
-        *   引用上述「核心證據庫」中的數據，點評哪一方的論點有數據支撐。
-        *   指出哪些論點缺乏證據與幻覺風險。
+        ## 2. 證據效力與量化指標 (Evidence & Quantification)
+        *   **反向證偽**：區分強證據 (Tier 1/2) 與弱證據 (Tier 3/4)。
+        *   **量化關鍵指標**：避免空泛形容。請引用證據中的具體數值，例如：
+            *   歷年平均股息率 (%)
+            *   Beta 值、VaR 或波動率 (%)
+        *   **資料來源具體化**：若引用「官方公告」或「財報」，**必須**給出具體來源（如：文件編號、具體日期、或 Database ID），方便驗證。
 
-        ## 3. 邏輯攻防戰況 (Synthesis)
-        *   評述雙方在邏輯上的亮點與漏洞。
-        *   交叉質詢環節誰佔上風？
+        ## 3. 邏輯對應與敏感度分析 (Logic & Sensitivity)
+        *   **預測透明度**：針對關鍵預測（如營收成長、股價目標），必須說明**背後的假設**與**來源**。
+        *   **敏感度分析 (Sensitivity Analysis)**：
+            *   請提供情境模擬：「若 [關鍵變數] 變動 X%，則 [結果] 預期變動 Y%」。
+            *   範例：若半導體庫存去化延後至 Q3，則預估 EPS 下修至 X 元。
+        *   **邏輯攻防**：評述雙方論點的邏輯對應關係（Challenge & Response），而不僅是各說各話。
 
-        ## 4. 最終裁決 (Verdict)
-        *   **勝負傾向**：(可選，若無明顯勝負則寫「平局/需更多資訊」)
+        ## 4. 風險評估與證據鏈接 (Risk & Citations)
+        *   **證據鏈接 (Evidence Linking)**：每個關鍵論點後**必須**附上證據來源編號或連結（例如：[Ref: TEJ-2023Q3] 或 [Ref: 官方公告 2024-01-15]）。
+        *   **風險指標矩陣**：請以 Markdown 表格呈現：
+            | 風險因子 | 觀測指標 (KPI) | 觸發條件 (Trigger) | 衝擊程度 (High/Med/Low) |
+            | :--- | :--- | :--- | :--- |
+            | ... | ... | ... | ... |
+
+        ## 5. 最終裁決與行動建議 (Verdict & Action)
+        *   **勝負傾向**：(可選)
         *   **共識事實**：雙方都認同的客觀點。
 
         請使用繁體中文，語氣專業且具建設性。

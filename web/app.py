@@ -216,14 +216,16 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
     try:
         # Extract IDs
         chairman_id = extract_id_from_dropdown(chairman_id)
-        
+        if not chairman_id:
+            return "錯誤: 請選擇主席", None, "⚠️ 參數錯誤: 未選擇主席"
+
         # Resolve Team IDs to Agent IDs
         pro_agents = get_team_members(pro_team_id)
         con_agents = get_team_members(con_team_id)
         neutral_agents = get_team_members(neutral_team_id) if neutral_team_id else []
 
         if not pro_agents or not con_agents:
-            return "錯誤: 必須選擇正方與反方團隊，且團隊必須包含成員。", None, "⚠️ 參數錯誤"
+            return "錯誤: 必須選擇正方與反方團隊，且團隊必須包含成員。", None, "⚠️ 參數錯誤: 團隊無成員或未選擇"
 
         teams = [
             {"name": "正方", "side": "pro", "agent_ids": pro_agents},
@@ -241,42 +243,56 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         }
         
         print(f"DEBUG: Creating config...", flush=True)
-        print(f"DEBUG: Payload: {json.dumps(config_payload, ensure_ascii=False)}", flush=True)
-        config_res = requests.post(f"{API_URL}/debates/config", json=config_payload)
+        # Timeout 10s for config creation
+        config_res = requests.post(f"{API_URL}/debates/config", json=config_payload, timeout=10)
         
         if config_res.status_code != 201:
-            print(f"ERROR: Create Config Failed. Status: {config_res.status_code}, Response: {config_res.text}", flush=True)
+            return f"建立設定失敗: {config_res.text}", None, "❌ 設定建立失敗"
             
         config_res.raise_for_status()
         config_id = config_res.json()["id"]
         print(f"DEBUG: Config created ID: {config_id}. Launching...", flush=True)
         
-        launch_res = requests.post(f"{API_URL}/debates/launch?config_id={config_id}")
+        # Timeout 10s for launch
+        launch_res = requests.post(f"{API_URL}/debates/launch?config_id={config_id}", timeout=10)
         launch_res.raise_for_status()
         
         task_id = launch_res.json()['task_id']
         print(f"DEBUG: Launch success. Task ID: {task_id}", flush=True)
         return f"辯論已啟動！任務 ID: {task_id}", task_id, "⏳ 正在初始化辯論環境..."
         
+    except requests.exceptions.Timeout:
+        return "請求超時：API 回應過慢，請檢查後端日誌。", None, "❌ 請求超時"
     except Exception as e:
         print(f"ERROR launching debate: {e}", flush=True)
-        return f"啟動失敗: {e}", None, f"啟動失敗: {e}"
+        import traceback
+        traceback.print_exc()
+        return f"啟動失敗: {str(e)}", None, f"啟動失敗: {str(e)}"
 
 def stream_debate_log(task_id):
+    print(f"DEBUG: stream_debate_log called with task_id: {task_id}", flush=True)
     if not task_id:
-        yield "無任務 ID", "❌ 無效的任務 ID"
+        yield "無任務 ID", "❌ 無效的任務 ID", ""
         return
 
     try:
-        # Initial status
-        yield "", "🚀 連接辯論串流..."
-
+        # Initial status (Force Yield immediately)
+        yield "正在連接後端服務...", "🚀 初始化連接...", "📊 連線中..."
+        
         # Use requests with stream=True for robust SSE handling
         print(f"[DEBUG STREAM] Connecting to {API_URL}/debates/{task_id}/stream", flush=True)
-        with requests.get(f"{API_URL}/debates/{task_id}/stream", stream=True) as response:
+        
+        # Add timeout for connection (connect=10, read=None for streaming)
+        with requests.get(f"{API_URL}/debates/{task_id}/stream", stream=True, timeout=(10, None)) as response:
+            if response.status_code != 200:
+                yield f"Error: Backend returned {response.status_code}", "❌ 連線失敗", "停止"
+                return
+
             history_list = [] # Store individual entries
             MAX_DISPLAY_ITEMS = 30
             
+            # Use iterator to handle timeouts if needed, but requests iter_lines is blocking.
+            # We trust the backend to send keepalives (usage updates).
             for line in response.iter_lines():
                 if line:
                     decoded_line = line.decode('utf-8')
@@ -287,13 +303,20 @@ def stream_debate_log(task_id):
                             display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
                             if len(history_list) > MAX_DISPLAY_ITEMS:
                                 display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
-                            yield display_md, "🏁 辯論已圓滿結束。"
+                            yield display_md, "🏁 辯論已圓滿結束。", gr.update()
                             break
                         try:
+                            # print(f"DEBUG: raw json chunk: {json_str[:50]}...", flush=True)
                             data = json.loads(json_str)
-                            # Debug log for stream data
-                            # print(f"[DEBUG STREAM] Received data type: {data.get('type')} content len: {len(data.get('content', ''))}", flush=True)
                             
+                            # Handle Progress Update Event
+                            if data.get("type") == "progress_update":
+                                progress = data.get("progress", 0)
+                                msg = data.get("message", "")
+                                stage = data.get("stage", "")
+                                yield gr.update(), f"⏳ {msg} ({progress}%)", gr.update()
+                                continue
+
                             # Handle Score Update Event
                             if data.get("type") == "score_update":
                                 side = data.get("side")
@@ -313,7 +336,16 @@ def stream_debate_log(task_id):
                                 if len(history_list) > MAX_DISPLAY_ITEMS:
                                     display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
                                     
-                                yield display_md, f"⚖️ 評分更新: {side} {delta_str}"
+                                yield display_md, f"⚖️ 評分更新: {side} {delta_str}", gr.update()
+                                continue
+                            
+                            # Handle Usage Update Event
+                            if data.get("type") == "usage_update":
+                                tokens = data.get("tokens", 0)
+                                cost = data.get("cost", 0.0)
+                                search_count = data.get("search_count", 0)
+                                usage_msg = f"### 📊 成本監控\n- **Tokens**: {tokens:,}\n- **Cost**: ${cost:.4f}\n- **Search**: {search_count} calls"
+                                yield gr.update(), gr.update(), usage_msg
                                 continue
                             
                             role = data.get("role", "System")
@@ -357,14 +389,14 @@ def stream_debate_log(task_id):
                             if len(history_list) > MAX_DISPLAY_ITEMS:
                                 display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
 
-                            yield display_md, status_msg
+                            yield display_md, status_msg, gr.update()
                         except json.JSONDecodeError:
                             pass
                         except Exception as inner_e:
                             print(f"[DEBUG STREAM] Inner Loop Error: {inner_e}", flush=True)
     except Exception as e:
         print(f"[DEBUG STREAM] Outer Error: {e}", flush=True)
-        yield f"**Error connecting to stream:** {str(e)}", f"❌ 連線錯誤: {str(e)}"
+        yield f"**Error connecting to stream:** {str(e)}", f"❌ 連線錯誤: {str(e)}", ""
 
 def list_prompts():
     try:
@@ -957,6 +989,7 @@ def main():
                             # Right Column: Live Status (Always Visible)
                             with gr.Column(scale=2):
                                 gr.Markdown("### 📺 實時戰況")
+                                stats_panel = gr.Markdown(value="📊 成本監控: 準備中...")
                                 live_log = gr.Markdown(label="辯論日誌串流", value="等待啟動...", height=600)
 
                         # --- Wizard Logic ---
@@ -1095,7 +1128,7 @@ def main():
                         ).success(
                             stream_debate_log,
                             inputs=[task_id_state],
-                            outputs=[live_log, debate_status_output]
+                            outputs=[live_log, debate_status_output, stats_panel]
                         )
 
                         refresh_roles_btn.click(force_refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
@@ -1151,7 +1184,8 @@ def main():
                                 
                                 agent_specialty = gr.Textbox(label="專長", placeholder="例如: 經濟學、哲學")
                                 agent_prompt = gr.TextArea(label="系統提示詞 (System Prompt)", lines=10, placeholder="你是...")
-                                agent_config = gr.Code(label="設定 (JSON)", language="json", value="{}")
+                                # Fallback to TextArea for compatibility if Code component is missing or problematic
+                                agent_config = gr.TextArea(label="設定 (JSON)", lines=5, value="{}")
                                 
                                 with gr.Row():
                                     cancel_edit_btn = gr.Button("⬅️ 取消 / 返回列表")
@@ -1458,10 +1492,10 @@ def main():
                         edit_tool_desc = gr.TextArea(label="工具描述 (Description)", lines=3)
                         
                         with gr.Accordion("詳細配置 (JSON)", open=True):
-                            edit_tool_schema = gr.Code(label="JSON Schema", language="json", value="{}")
-                            edit_tool_openapi = gr.Code(label="OpenAPI Spec", language="json", value="{}")
-                            edit_tool_config = gr.Code(label="API Config (HTTP Only)", language="json", value="{}")
-                            edit_tool_code = gr.Code(label="Python Code (Python Only)", language="python", value="")
+                            edit_tool_schema = gr.TextArea(label="JSON Schema", lines=5, value="{}")
+                            edit_tool_openapi = gr.TextArea(label="OpenAPI Spec", lines=5, value="{}")
+                            edit_tool_config = gr.TextArea(label="API Config (HTTP Only)", lines=5, value="{}")
+                            edit_tool_code = gr.TextArea(label="Python Code (Python Only)", lines=10, value="")
                         
                         edit_tool_enabled = gr.Checkbox(label="啟用 (Enabled)", value=True)
                         
@@ -1530,12 +1564,12 @@ def main():
                                 tool_name = gr.Textbox(label="工具名稱", placeholder="e.g., my_tool (for MCP, this will be the prefix)")
                                 tool_type = gr.Dropdown(choices=["http", "python", "mcp"], label="工具類型", value="http")
                                 tool_group = gr.Dropdown(choices=["user_defined", "browser_use", "financial_data", "data_analysis", "mcp"], label="工具組", value="user_defined", allow_custom_value=True)
-                                tool_schema = gr.Code(label="參數 Schema (JSON Schema) [MCP 無需填寫]", language="json", value='{"type": "object", "properties": {"q": {"type": "string"}}}')
+                                tool_schema = gr.TextArea(label="參數 Schema (JSON Schema) [MCP 無需填寫]", lines=5, value='{"type": "object", "properties": {"q": {"type": "string"}}}')
                                 
                                 with gr.Group(visible=True) as http_config_group:
                                     tool_url = gr.Textbox(label="API URL", placeholder="https://api.example.com/data")
                                     tool_method = gr.Dropdown(choices=["GET", "POST"], label="HTTP Method", value="GET")
-                                    tool_headers = gr.Code(label="Headers (JSON)", language="json", value='{}')
+                                    tool_headers = gr.TextArea(label="Headers (JSON)", lines=3, value='{}')
 
                                 with gr.Group(visible=False) as mcp_config_group:
                                     mcp_url = gr.Textbox(label="MCP Endpoint URL", placeholder="https://mcp.alphavantage.co/mcp")
@@ -1543,7 +1577,7 @@ def main():
                                     gr.Markdown("ℹ️ **MCP 說明**: 註冊後，系統會自動從 Endpoint 獲取工具列表，並以 `[工具名稱].[MCP工具名]` 格式註冊多個工具。")
 
                                 with gr.Group(visible=False) as python_config_group:
-                                    tool_python_code = gr.Code(label="Python Code", language="python", value='def main(arg1):\n    return f"Hello {arg1}"')
+                                    tool_python_code = gr.TextArea(label="Python Code", lines=10, value='def main(arg1):\n    return f"Hello {arg1}"')
 
                                 tool_description = gr.Textbox(label="工具描述 (可自動生成)")
                                 with gr.Row():
@@ -1553,8 +1587,8 @@ def main():
                                 # Try-it 區塊
                                 gr.Markdown("#### 🔬 Try it 測試 (不入庫) [MCP 暫不支援在此預覽]")
                                 data_path = gr.Dropdown(choices=["auto", "data", "datatable.data", "items", "results"], value="auto", label="資料路徑")
-                                try_params = gr.Code(label="測試參數 Params (JSON)", language="json", value='{}')
-                                try_headers = gr.Code(label="附加 Headers (JSON)", language="json", value='{}')  # 目前僅展示，後端以 tool_headers 為主
+                                try_params = gr.TextArea(label="測試參數 Params (JSON)", lines=3, value='{}')
+                                try_headers = gr.TextArea(label="附加 Headers (JSON)", lines=3, value='{}')  # 目前僅展示，後端以 tool_headers 為主
                                 try_status = gr.Markdown(value="")
                                 try_btn = gr.Button("▶️ Try it", variant="primary")
                                 preview_table = gr.DataFrame(label="預覽資料", wrap=True)
@@ -2133,8 +2167,23 @@ def main():
     return demo
 
 if __name__ == "__main__":
-    # Preload core data before starting the app
-    preload_core_data()
-    
-    demo = main()
-    demo.queue().launch(server_name="0.0.0.0", server_port=7860)
+    print("🚀 Starting Web App initialization...", flush=True)
+    try:
+        # Preload core data before starting the app (Best effort)
+        try:
+            preload_core_data()
+        except Exception as e:
+            print(f"⚠️ Warning: Core data preload failed: {e}", flush=True)
+            print("   The app will still start, but initial data may be missing.", flush=True)
+        
+        demo = main()
+        # Enable queue for SSE
+        demo.queue(max_size=20).launch(
+            server_name="0.0.0.0",
+            server_port=7860,
+            show_error=True
+        )
+    except Exception as e:
+        print(f"❌ FATAL ERROR starting Web App: {e}", flush=True)
+        import traceback
+        traceback.print_exc()

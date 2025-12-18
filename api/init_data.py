@@ -159,31 +159,61 @@ def initialize_toolsets(db: Session):
     db.refresh(global_ts)
 
     # 2. Role-Specific ToolSets
+    # Updated to include ChinaTimes tools and Search for better coverage
     role_toolsets_config = {
         "Quantitative ToolSet": {
             "desc": "量化分析工具集：專注於價格數據、期貨選擇權與即時市場動能，支援量化模型運算。",
-            "tools": ["tej.stock_price", "tej.futures_data", "tej.options_daily_trading", "tej.financial_cover_cumulative", "chinatimes.market_rankings", "chinatimes.financial_ratios"],
+            "tools": [
+                "tej.stock_price", "tej.futures_data", "tej.options_daily_trading", "tej.financial_cover_cumulative",
+                "chinatimes.stock_kline", "chinatimes.market_rankings", "chinatimes.stock_rt", "chinatimes.financial_ratios",
+                "searxng.search"
+            ],
             "target_roles": ["量化分析師"]
         },
         "Valuation ToolSet": {
             "desc": "估值建模工具集：專注於財報細節、股利政策與會計準則，支援 DCF/PE/PB 估值模型。",
-            "tools": ["tej.financial_summary", "tej.financial_summary_quarterly", "tej.shareholder_meeting", "tej.stock_price", "tej.ifrs_account_descriptions", "chinatimes.stock_fundamental", "chinatimes.balance_sheet", "chinatimes.income_statement", "chinatimes.cash_flow"],
+            "tools": [
+                "tej.financial_summary", "tej.financial_summary_quarterly", "tej.shareholder_meeting", "tej.stock_price",
+                "tej.ifrs_account_descriptions",
+                "chinatimes.stock_fundamental", "chinatimes.balance_sheet", "chinatimes.income_statement", "chinatimes.cash_flow",
+                "searxng.search"
+            ],
             "target_roles": ["價值投資人"]
         },
         "Industry ToolSet": {
             "desc": "產業研究工具集：專注於月營收變化、公司基本資料與競爭者比較，支援產業鏈分析。",
-            "tools": ["tej.monthly_revenue", "tej.company_info", "tej.financial_summary", "tej.offshore_fund_holdings_industry", "chinatimes.sector_info", "chinatimes.stock_fundamental"],
+            "tools": [
+                "tej.monthly_revenue", "tej.company_info", "tej.financial_summary", "tej.offshore_fund_holdings_industry",
+                "chinatimes.sector_info", "chinatimes.stock_fundamental", "chinatimes.market_rankings",
+                "searxng.search"
+            ],
             "target_roles": ["產業研究員"]
         },
         "Risk ToolSet": {
             "desc": "風控合規工具集：專注於籌碼分佈、融資券變化與外資動向，支援風險預警與合規檢查。",
-            "tools": ["tej.institutional_holdings", "tej.margin_trading", "tej.foreign_holdings", "tej.offshore_fund_suspension"],
+            "tools": [
+                "tej.institutional_holdings", "tej.margin_trading", "tej.foreign_holdings", "tej.offshore_fund_suspension",
+                "chinatimes.stock_fundamental", "chinatimes.financial_ratios", "chinatimes.stock_news",
+                "searxng.search"
+            ],
             "target_roles": ["風控官", "挑戰者"]
         },
         "Strategic ToolSet": {
-            "desc": "策略規劃工具集：專注於市場宏觀趨勢、大盤指數與公司概況，支援高階策略制定。",
-            "tools": ["tej.company_info", "tej.financial_summary", "chinatimes.stock_fundamental", "chinatimes.market_index", "chinatimes.sector_info", "internal.get_industry_tree", "internal.get_key_personnel", "internal.get_corporate_relationships"],
-            "target_roles": ["首席分析師", "報告主筆", "宏觀策略師"]
+            "desc": "策略規劃與報告撰寫工具集：包含完整的財報查詢、新聞檢索與產業分析工具，支援撰寫深度投資報告。",
+            "tools": [
+                # TEJ Essentials
+                "tej.company_info", "tej.financial_summary", "tej.stock_price", "tej.monthly_revenue",
+                "tej.institutional_holdings", "tej.financial_cover_quarterly",
+                # ChinaTimes Essentials
+                "chinatimes.stock_fundamental", "chinatimes.market_index", "chinatimes.sector_info",
+                "chinatimes.stock_rt", "chinatimes.market_rankings",
+                # Financial Statements
+                "chinatimes.balance_sheet", "chinatimes.income_statement",
+                "chinatimes.cash_flow", "chinatimes.financial_ratios",
+                # Internal & Search
+                "internal.get_industry_tree", "searxng.search"
+            ],
+            "target_roles": ["首席分析師", "報告主筆", "宏觀策略師", "report_editor"]
         },
         "Growth ToolSet": {
             "desc": "成長動能工具集：專注於市場熱點、排行與類股輪動，支援尋找高成長標的。",
@@ -228,8 +258,13 @@ def initialize_toolsets(db: Session):
         
         # Assign to matching agents
         for target_role in ts_config["target_roles"]:
-            # Find agents whose name contains the target role string
-            agents = db.query(models.Agent).filter(models.Agent.name.like(f"%{target_role}%")).all()
+            # Find agents whose name OR role contains the target string
+            # This ensures robust matching for both display names (e.g. "Investment Report Editor") and role IDs (e.g. "report_editor")
+            agents = db.query(models.Agent).filter(
+                (models.Agent.name.like(f"%{target_role}%")) |
+                (models.Agent.role.like(f"%{target_role}%"))
+            ).all()
+            
             for agent in agents:
                 # Check if already assigned
                 exists = db.query(models.AgentToolSet).filter(

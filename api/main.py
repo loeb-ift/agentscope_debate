@@ -113,6 +113,11 @@ async def startup_event():
         tool_registry.register_lazy("chinatimes.market_rankings", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesMarketRankingsAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Market Rankings (Top 10)")
         tool_registry.register_lazy("chinatimes.sector_info", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesSectorAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Sector Info")
         tool_registry.register_lazy("chinatimes.stock_fundamental", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesStockFundamentalAdapter"), group="financial_data", description="[PRIORITY] ChinaTimes Stock Fundamental Check")
+        # Financial Statements
+        tool_registry.register_lazy("chinatimes.balance_sheet", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesBalanceSheetAdapter"), group="financial_data", description="ChinaTimes Balance Sheet")
+        tool_registry.register_lazy("chinatimes.income_statement", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesIncomeStatementAdapter"), group="financial_data", description="ChinaTimes Income Statement")
+        tool_registry.register_lazy("chinatimes.cash_flow", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesCashFlowAdapter"), group="financial_data", description="ChinaTimes Cash Flow Statement")
+        tool_registry.register_lazy("chinatimes.financial_ratios", lazy_import_factory("adapters.chinatimes_suite", "ChinaTimesFinancialRatiosAdapter"), group="financial_data", description="ChinaTimes Financial Ratios")
 
     tool_registry.register(TEJCompanyInfo())
     tool_registry.register(TEJStockPrice())
@@ -210,14 +215,58 @@ async def stream_debate(task_id: str):
         except Exception as e:
             print(f"Error fetching log history: {e}", flush=True)
 
+        # Send initial zero usage (Send this FIRST to unblock frontend)
+        import time
+        import json
+        last_cost_check = 0
+        yield f"data: {json.dumps({'type': 'usage_update', 'tokens': 0, 'cost': 0.0, 'search_count': 0})}\n\n"
+
         # 2. Subscribe to new logs
-        print(f"[DEBUG API] Subscribing to debate:{task_id}:log_stream", flush=True)
-        pubsub = redis_client.pubsub()
-        pubsub.subscribe(f"debate:{task_id}:log_stream")
-        for message in pubsub.listen():
-            if message['type'] == 'message':
-                # print(f"[DEBUG API] Sending message: {message['data'][:50]}...", flush=True)
-                yield f"data: {message['data']}\n\n"
+        try:
+            print(f"[DEBUG API] Subscribing to debate:{task_id}:log_stream", flush=True)
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe(f"debate:{task_id}:log_stream")
+        except Exception as e:
+            print(f"Error subscribing to Redis: {e}", flush=True)
+            yield f"data: {json.dumps({'role': 'System', 'content': f'❌ Redis 訂閱失敗: {str(e)}'})}\n\n"
+            return
+
+        # Use get_message() loop to allow periodic cost updates
+        while True:
+            # Check for Redis messages
+            message = pubsub.get_message(timeout=0.1)
+            
+            if message and message['type'] == 'message':
+                msg_data = message['data']
+                if isinstance(msg_data, bytes):
+                    msg_data = msg_data.decode('utf-8')
+                
+                yield f"data: {msg_data}\n\n"
+                
+                if msg_data == "[DONE]":
+                    break
+            
+            # Periodic Cost Update (every 2s)
+            now = time.time()
+            if now - last_cost_check > 2:
+                try:
+                    usage = redis_client.hgetall(f"debate:{task_id}:usage")
+                    if usage:
+                        # Decode bytes if needed (redis-py returns bytes for hgetall)
+                        tokens = int(usage.get(b"total_tokens", 0) or usage.get("total_tokens", 0))
+                        cost = float(usage.get(b"total_cost", 0.0) or usage.get("total_cost", 0.0))
+                        search_count = int(usage.get(b"search_count", 0) or usage.get("search_count", 0))
+                        
+                        event_data = {
+                            "type": "usage_update",
+                            "tokens": tokens,
+                            "cost": cost,
+                            "search_count": search_count
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                except Exception:
+                    pass
+                last_cost_check = now
     
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
