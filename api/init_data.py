@@ -137,7 +137,11 @@ def initialize_toolsets(db: Session):
         "chinatimes.market_index",
         "chinatimes.market_rankings",
         "chinatimes.sector_info",
-        "chinatimes.stock_fundamental"
+        "chinatimes.stock_fundamental",
+        # EDA Tool (Chairman only by design, but registered globally to ensure visibility in UI/Testing if needed)
+        # 實務上主席會使用 eda_tool_adapter，其內部會調用 ods.eda_describe
+        # 這裡加入 chairman.eda_analysis 讓其成為可選工具
+        "chairman.eda_analysis"
     ]
     
     global_ts = db.query(models.ToolSet).filter(models.ToolSet.is_global == True).first()

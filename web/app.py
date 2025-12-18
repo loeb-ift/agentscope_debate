@@ -66,7 +66,7 @@ def preload_core_data():
     import time
     
     # Wait for API to be ready
-    max_retries = 10
+    max_retries = 30 # Increased from 10 to 30 (total ~60s)
     retry_delay = 2
     
     print("⏳ Waiting for API service to be ready...", flush=True)
@@ -535,13 +535,12 @@ def list_custom_tools():
         return pd.DataFrame({"error": [str(e)]})
 
 def get_tool_choices():
-    try:
-        response = requests.get(f"{API_URL}/tools")
-        response.raise_for_status()
-        tools = response.json()
-        return [(f"{t['name']} ({t['id']})", t['id']) for t in tools]
-    except:
+    tools = _get_cached_or_fetch("toolsets", f"{API_URL}/tools") # Note: toolsets cache key is fine or we add one
+    # Actually, let's just use the URL but cache it under its own key for clarity
+    tools = _get_cached_or_fetch("tools_raw", f"{API_URL}/tools")
+    if not tools:
         return []
+    return [(f"{t['name']} ({t['id']})", t['id']) for t in tools]
 
 def list_companies(sector=None, group=None, sub_industry=None):
     try:
@@ -622,13 +621,12 @@ def create_security(sec_id, sec_name, sec_type, issuer_id, ticker, isin, mcap):
         return f"Error: {e}"
 
 def list_replays():
-    try:
-        response = requests.get(f"{API_URL}/replays")
-        response.raise_for_status()
-        replays = response.json()
-        return [r['filename'] for r in replays]
-    except:
+    data = _get_cached_or_fetch("replays", f"{API_URL}/replays")
+    if not data:
         return []
+    # If dict with items
+    replays = data.get("items", data) if isinstance(data, dict) else data
+    return [r['filename'] for r in replays]
 
 def get_replay_markdown(filename):
     try:
@@ -696,13 +694,11 @@ def get_all_tool_names():
         return []
 
 def get_all_prompt_keys():
-    try:
-        response = requests.get(f"{API_URL}/prompts")
-        response.raise_for_status()
-        prompts = response.json()
-        return [p['key'] for p in prompts]
-    except:
+    data = _get_cached_or_fetch("prompts_raw", f"{API_URL}/prompts")
+    if not data:
         return []
+    prompts = data.get("items", data) if isinstance(data, dict) else data
+    return [p['key'] for p in prompts]
 
 def create_toolset(name, description, tool_names, is_global):
     try:
@@ -730,22 +726,20 @@ def delete_toolset(toolset_id):
 
 
 def get_toolset_choices():
-    try:
-        response = requests.get(f"{API_URL}/toolsets")
-        response.raise_for_status()
-        toolsets = response.json()
-        return [(f"{ts['name']} ({ts['id']})", ts['id']) for ts in toolsets]
-    except:
+    data = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets")
+    if not data:
         return []
+    # If API returns a list (old) or dict with items (new)
+    toolsets = data.get("items", data) if isinstance(data, dict) else data
+    return [(f"{ts['name']} ({ts['id']})", ts['id']) for ts in toolsets]
 
 def get_financial_term_choices():
-    try:
-        response = requests.get(f"{API_URL}/internal/financial_terms")
-        response.raise_for_status()
-        terms = response.json()
-        return [(f"{t['term_name']} ({t['term_id']})", t['term_id']) for t in terms]
-    except:
+    data = _get_cached_or_fetch("financial_terms", f"{API_URL}/internal/financial_terms")
+    if not data:
         return []
+    # Handle list or dict structure
+    terms = data.get("items", data) if isinstance(data, dict) else data
+    return [(f"{t['term_name']} ({t['term_id']})", t['term_id']) for t in terms]
 
 def get_system_config():
     try:
@@ -807,13 +801,10 @@ def get_industry_tree_data():
         return {}
 
 def get_sector_choices():
-    try:
-        response = requests.get(f"{API_URL}/internal/sectors")
-        response.raise_for_status()
-        sectors = response.json()
-        return sectors
-    except:
+    data = _get_cached_or_fetch("sectors", f"{API_URL}/internal/sectors")
+    if not data:
         return []
+    return sorted(data)
 
 def get_company_update_status():
     try:
@@ -1790,15 +1781,63 @@ def main():
                                 demo.load(update_toolset_dropdown, outputs=selected_toolset_id)
 
 
-                    # Sub-tab 2.4: 實體管理
-                    with gr.TabItem("🏦 實體管理 (Entities)"):
+                    # Sub-tab 2.4: 產業數據管理 (Renamed from Entities)
+                    with gr.TabItem("🏦 產業數據管理 (Industry Data)"):
                         gr.Markdown("""
-                        管理辯手可使用的內部實體數據（如公司、金融商品）。這些數據通過 `internal.*` 工具暴露給辯手。
+                        管理辯手可使用的內部實體數據（如公司、證券、術語、產業關係）。這些數據通過 `internal.*` 工具暴露給辯手。
                         """)
                         
+                        # --- Status Bar ---
+                        with gr.Row(variant="panel"):
+                            update_status_md = gr.Markdown("檢查更新狀態...")
+                            update_btn = gr.Button("🚀 立即更新產業資料")
+                        
+                        def check_update_status():
+                            last_update, is_old = get_company_update_status()
+                            msg = f"### 📅 資料最後更新: {last_update}"
+                            if is_old:
+                                msg += "\n\n⚠️ **資料已超過 90 天未更新，建議立即更新！**"
+                            else:
+                                msg += "\n\n✅ 資料尚新。"
+                            return msg
+
+                        demo.load(check_update_status, outputs=update_status_md)
+                        update_btn.click(trigger_company_update, outputs=None).then(
+                            lambda: "🔄 更新中... 請稍後刷新頁面查看時間。", outputs=update_status_md
+                        )
+
                         with gr.Tabs():
+                            # 1. 產業地圖 (Moved from Tab 3)
+                            with gr.TabItem("🗺️ 產業地圖"):
+                                with gr.Row():
+                                    sector_select = gr.Dropdown(label="選擇產業 (Sector)", choices=[], allow_custom_value=True)
+                                    refresh_tree_btn = gr.Button("🔄 刷新地圖")
+                                
+                                tree_view = gr.JSON(label="產業結構樹 (Sector -> Stream -> Companies)")
+                                
+                                def update_sector_choices():
+                                    return gr.update(choices=get_sector_choices())
+                                
+                                def load_tree(sector):
+                                    if not sector:
+                                        return {"info": "請選擇一個產業以檢視結構圖 (Select a sector to view details)"}
+                                    
+                                    # Optimization: Fetch only when needed
+                                    full_tree = get_industry_tree_data()
+                                    return {sector: full_tree.get(sector, {})}
+                                
+                                refresh_tree_btn.click(update_sector_choices, outputs=sector_select).then(
+                                    load_tree, inputs=[sector_select], outputs=tree_view
+                                )
+                                sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
+                                
+                                # Init choices
+                                demo.load(update_sector_choices, outputs=sector_select)
+
+                            # 2. 公司管理 (Merged: Create + Filter/List)
                             with gr.TabItem("🏢 公司管理"):
                                 with gr.Row():
+                                    # Left: Create
                                     with gr.Column(scale=1):
                                         gr.Markdown("### 新增公司")
                                         company_id = gr.Textbox(label="公司 ID (統編/GUID)", placeholder="12345678")
@@ -1810,20 +1849,43 @@ def main():
                                         create_company_btn = gr.Button("新增", variant="primary")
                                         create_company_output = gr.Textbox(label="結果")
                                     
+                                    # Right: List & Filter
                                     with gr.Column(scale=2):
                                         gr.Markdown("### 公司列表")
-                                        refresh_companies_btn = gr.Button("刷新")
-                                        companies_table = gr.DataFrame(headers=["ID", "Name", "Ticker", "Sector"], wrap=True)
+                                        with gr.Row():
+                                            filter_sector = gr.Dropdown(label="篩選產業", choices=[], allow_custom_value=True)
+                                            filter_group = gr.Dropdown(label="篩選環節 (Stream)", choices=["上游", "中游", "下游"], allow_custom_value=True)
+                                            filter_sub = gr.Textbox(label="篩選子產業")
+                                            refresh_list_btn = gr.Button("🔍 搜尋 / 刷新")
+
+                                        companies_table = gr.DataFrame(headers=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"], wrap=True)
                                 
+                                # Actions
+                                def update_list(sec, grp, sub):
+                                    return list_companies(sec, grp, sub)
+                                    
+                                def update_filter_choices():
+                                    return gr.update(choices=get_sector_choices())
+
                                 create_company_btn.click(
                                     create_company,
                                     inputs=[company_id, company_name, company_ticker, company_sector, company_mcap],
                                     outputs=create_company_output
-                                ).then(list_companies, outputs=companies_table)
+                                ).then(
+                                    update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table
+                                )
                                 
-                                refresh_companies_btn.click(list_companies, outputs=companies_table)
-                                demo.load(list_companies, outputs=companies_table)
+                                refresh_list_btn.click(
+                                    update_list,
+                                    inputs=[filter_sector, filter_group, filter_sub],
+                                    outputs=companies_table
+                                )
+                                
+                                # Init
+                                demo.load(update_filter_choices, outputs=filter_sector)
+                                demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
 
+                            # 3. 證券管理 (Existing)
                             with gr.TabItem("📈 證券管理"):
                                 with gr.Row():
                                     with gr.Column(scale=1):
@@ -1853,6 +1915,7 @@ def main():
                                 refresh_sec_btn.click(list_securities, outputs=sec_table)
                                 demo.load(list_securities, outputs=sec_table)
 
+                            # 4. 金融術語管理 (Existing)
                             with gr.TabItem("📚 金融術語管理"):
                                 gr.Markdown("### 編輯金融術語 (Balance Sheet, Income Statement, Cash Flow)")
                                 with gr.Row():
@@ -1907,92 +1970,6 @@ def main():
                                 
                                 demo.load(list_financial_terms, outputs=terms_table)
                                 demo.load(update_term_dropdown, outputs=edit_term_id)
-
-            # ==============================
-            # Tab 3: ⛓️ 產業鏈管理 (Industry Chain)
-            # ==============================
-            with gr.TabItem("⛓️ 產業鏈管理"):
-                
-                # --- Status Bar ---
-                with gr.Row(variant="panel"):
-                    update_status_md = gr.Markdown("檢查更新狀態...")
-                    update_btn = gr.Button("🚀 立即更新產業資料")
-                
-                def check_update_status():
-                    last_update, is_old = get_company_update_status()
-                    msg = f"### 📅 資料最後更新: {last_update}"
-                    if is_old:
-                        msg += "\n\n⚠️ **資料已超過 90 天未更新，建議立即更新！**"
-                    else:
-                        msg += "\n\n✅ 資料尚新。"
-                    return msg
-
-                demo.load(check_update_status, outputs=update_status_md)
-                update_btn.click(trigger_company_update, outputs=None).then(
-                    lambda: "🔄 更新中... 請稍後刷新頁面查看時間。", outputs=update_status_md
-                )
-
-                with gr.Tabs():
-                    with gr.TabItem("🗺️ 產業地圖"):
-                        with gr.Row():
-                            sector_select = gr.Dropdown(label="選擇產業 (Sector)", choices=[], allow_custom_value=True)
-                            refresh_tree_btn = gr.Button("🔄 刷新地圖")
-                        
-                        tree_view = gr.JSON(label="產業結構樹 (Sector -> Stream -> Companies)")
-                        
-                        def update_sector_choices():
-                            return gr.update(choices=get_sector_choices())
-                        
-                        def load_tree(sector):
-                            if not sector:
-                                return {"info": "請選擇一個產業以檢視結構圖 (Select a sector to view details)"}
-                            
-                            # Only fetch full tree if really needed, or better yet, if we had an API for single sector
-                            # Since we only have full tree API, we still have to fetch it, but at least we don't render it all at once
-                            # Optimization: The backend is cached now, so fetching is fast (0.1s).
-                            # The rendering of a massive JSON in browser is the bottleneck.
-                            # By forcing a sector selection, we limit the rendered JSON size significantly.
-                            full_tree = get_industry_tree_data()
-                            return {sector: full_tree.get(sector, {})}
-                        
-                        refresh_tree_btn.click(update_sector_choices, outputs=sector_select).then(
-                            load_tree, inputs=[sector_select], outputs=tree_view
-                        )
-                        sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
-                        
-                        # Init
-                        demo.load(update_sector_choices, outputs=sector_select)
-                        # Remove auto-load of full tree on startup
-                        # demo.load(load_tree, inputs=[sector_select], outputs=tree_view)
-
-                    with gr.TabItem("📋 公司列表與管理"):
-                        with gr.Row():
-                            filter_sector = gr.Dropdown(label="篩選產業", choices=[], allow_custom_value=True)
-                            filter_group = gr.Dropdown(label="篩選環節 (Stream)", choices=["上游", "中游", "下游"], allow_custom_value=True)
-                            filter_sub = gr.Textbox(label="篩選子產業 (Sub-industry)")
-                            refresh_list_btn = gr.Button("🔍 搜尋 / 刷新")
-                        
-                        company_list_table = gr.DataFrame(
-                            headers=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"],
-                            interactive=False,
-                            wrap=True
-                        )
-                        
-                        def update_list(sec, grp, sub):
-                            return list_companies(sec, grp, sub)
-                            
-                        def update_filter_choices():
-                            return gr.update(choices=get_sector_choices())
-
-                        refresh_list_btn.click(
-                            update_list,
-                            inputs=[filter_sector, filter_group, filter_sub],
-                            outputs=company_list_table
-                        )
-                        
-                        # Sync choices
-                        demo.load(update_filter_choices, outputs=filter_sector)
-                        demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=company_list_table)
 
             # ==============================
             # Tab 4: 📝 提示詞控制台 (Prompt Console)

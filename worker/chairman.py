@@ -55,9 +55,14 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         """
         self._publish_log(debate_id, "🕵️ 主席正在進行背景調查 (Entity Recognition)...")
         
-        # 1. Prepare Tools (Search & TEJ)
+        # 1. Prepare Tools (Search & TEJ + ODS)
         investigation_tools = []
         target_tool_names = ["searxng.search", "tej.company_info", "tej.stock_price"]
+        
+        # [ODS Integration] Enable ODS for investigation if available
+        # Note: In real world, ODS is an agent, not a simple tool.
+        # But we can expose a tool interface "ask_data_scientist" that bridges to the agent.
+        # For now, we keep using direct tools for basic investigation to save latency.
         
         for name in target_tool_names:
             try:
@@ -253,7 +258,11 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
 
 JSON 必須包含以下欄位：
 - step0_temporal_positioning
-- step00_company_identification
+- step06_company_identification
+- entity_analysis
+- event_analysis
+- expected_impact
+- investigation_factors
 - step1_type_classification
 - step2_core_elements
 - step3_causal_chain
@@ -369,6 +378,24 @@ JSON 必須包含以下欄位：
                     if companies and isinstance(companies, list):
                         company_names = [c.get("name", "") for c in companies if isinstance(c, dict)]
                         summary_parts.append(f"龍頭企業：{', '.join(company_names)}")
+            
+            # [New] Add Entity and Event info to summary if handcard/summary is missing
+            if "entity_analysis" in analysis_result:
+                entity_info = analysis_result["entity_analysis"]
+                if isinstance(entity_info, dict):
+                    entity = entity_info.get("primary_entity", {})
+                    if isinstance(entity, dict):
+                        summary_parts.append(f"核心實體：{entity.get('name', 'N/A')} ({entity.get('code', 'N/A')})")
+                elif isinstance(entity_info, str):
+                    summary_parts.append(f"核心實體分析：{entity_info}")
+            
+            if "event_analysis" in analysis_result:
+                event_info = analysis_result["event_analysis"]
+                if isinstance(event_info, dict):
+                    summary_parts.append(f"事件類型：{event_info.get('event_type', 'N/A')}")
+                    summary_parts.append(f"關鍵行動：{event_info.get('action', 'N/A')}")
+                elif isinstance(event_info, str):
+                    summary_parts.append(f"事件分析：{event_info}")
                 
             if "step2_elements" in analysis_result: # Same key in new prompt? No, new is same step2_core_elements?
                 # Wait, prompt says: step2_core_elements. Old code: step2_elements.
@@ -400,11 +427,21 @@ JSON 必須包含以下欄位：
         }
         
         try:
-            # 1. Subject & Code from Step 00
-            step00 = analysis_result.get("step00_company_identification", {})
-            if isinstance(step00, dict):
-                decree["subject"] = step00.get("identified_companies", "Unknown")
-                decree["code"] = step00.get("stock_codes", "Unknown")
+            # 1. Subject & Code from Step 06 or entity_analysis
+            step06 = analysis_result.get("step06_company_identification", {})
+            entity_analysis = analysis_result.get("entity_analysis", {})
+            
+            if isinstance(step06, dict) and step06.get("identified_companies"):
+                decree["subject"] = step06.get("identified_companies", "Unknown")
+                decree["code"] = step06.get("stock_codes", "Unknown")
+            elif isinstance(entity_analysis, dict):
+                primary_entity = entity_analysis.get("primary_entity", {})
+                if isinstance(primary_entity, dict):
+                    decree["subject"] = primary_entity.get("name", "Unknown")
+                    decree["code"] = primary_entity.get("code", "Unknown")
+                elif isinstance(entity_analysis.get("name"), str): # Robustness for flatter structure
+                    decree["subject"] = entity_analysis.get("name", "Unknown")
+                    decree["code"] = entity_analysis.get("code", "Unknown")
             
             # 2. Timeframe & Question from Step 2/Step 0
             step2 = analysis_result.get("step2_core_elements", "")
@@ -807,8 +844,83 @@ JSON 必須包含以下欄位：
                 
             except Exception as e:
                 print(f"Extended research failed for '{q}': {e}")
-                
-        return "\n\n".join(research_results)
+        
+        self._publish_log(debate_id, f"✅ 延伸調查完成，共獲得 {len(research_results)} 項發現。")
+        return "\n\n".join(research_results) if research_results else "延伸調查未獲得額外資訊。"
+
+    async def _generate_eda_summary(self, topic: str, debate_id: str, handcard: str = "") -> str:
+        """
+        生成 EDA 自動分析摘要（通過工具系統）。
+        
+        流程：
+        1. 從 topic/handcard 提取股票代碼
+        2. 調用 chairman.eda_analysis 工具
+        3. 返回分析摘要
+        
+        Returns:
+            EDA 分析摘要文本
+        """
+        self._publish_log(debate_id, "📊 主席正在進行 EDA 自動分析...")
+        
+        try:
+            # Step 1: 提取股票代碼
+            stock_codes = self._extract_stock_codes_from_topic(topic, handcard)
+            
+            if not stock_codes:
+                self._publish_log(debate_id, "⚠️ 未能識別股票代碼，跳過 EDA 分析")
+                return "(未進行 EDA 分析：無法識別股票代碼)"
+            
+            # 使用第一個識別到的代碼
+            symbol = stock_codes[0]
+            self._publish_log(debate_id, f"🎯 識別到股票代碼: {symbol}")
+            
+            # Step 2: 調用 EDA 工具
+            from worker.tool_invoker import call_tool
+            
+            params = {
+                "symbol": symbol,
+                "debate_id": debate_id,
+                "lookback_days": 120
+            }
+            
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, call_tool, "chairman.eda_analysis", params)
+            
+            # Step 3: 處理結果
+            if result.get("success"):
+                self._publish_log(debate_id, f"✅ EDA 分析完成")
+                return result.get("summary", "(EDA 分析完成但無摘要)")
+            else:
+                error_msg = result.get("error", "Unknown error")
+                self._publish_log(debate_id, f"⚠️ EDA 分析失敗: {error_msg}")
+                return f"(EDA 分析失敗：{error_msg})"
+            
+        except Exception as e:
+            self._publish_log(debate_id, f"❌ EDA 分析異常: {str(e)}")
+            print(f"EDA generation error: {e}")
+            import traceback
+            traceback.print_exc()
+            return "(EDA 分析失敗：系統異常)"
+    
+    def _extract_stock_codes_from_topic(self, topic: str, handcard: str = "") -> list:
+        """從辯論主題和手卡中提取股票代碼"""
+        import re
+        
+        codes = []
+        
+        # 嘗試從 topic 提取（格式：2330.TW, 8942, etc.）
+        pattern = r'\b(\d{4})(?:\.(?:TW|TWO))?\b'
+        matches = re.findall(pattern, topic)
+        codes.extend([f"{code}.TW" for code in matches])
+        
+        # 嘗試從 handcard 提取
+        if handcard:
+            handcard_str = json.dumps(handcard, ensure_ascii=False) if isinstance(handcard, dict) else str(handcard)
+            matches = re.findall(pattern, handcard_str)
+            codes.extend([f"{code}.TW" for code in matches])
+        
+        # 去重
+        return list(set(codes))
 
     async def summarize_debate(self, debate_id: str, topic: str, rounds_data: list, handcard: str = "") -> str:
         """
@@ -817,12 +929,15 @@ JSON 必須包含以下欄位：
         1. 資料聚合：歷史紀錄 + 正反方論點
         2. 戰略對齊：注入 Handcard 檢查是否偏題
         3. 證據審查：注入 Verified EvidenceDoc
-        4. 綜合評判：生成結構化報告
-        5. 延伸建議：生成可執行行動指南
+        4. EDA 自動分析：生成實證數據報表 (NEW)
+        5. 綜合評判：生成結構化報告
+        6. 延伸建議：生成可執行行動指南
         """
         print(f"Chairman '{self.name}' is making the final conclusion (Async).")
         
-        # 1. Fetch Verified Evidence (SSOT)
+        # [NEW] Step 0: EDA 自動分析
+        eda_summary = await self._generate_eda_summary(topic, debate_id, handcard)
+        
         # 1. Fetch Verified Evidence (SSOT)
         lc = EvidenceLifecycle(debate_id)
         verified_docs = lc.get_verified_evidence(limit=20) # Get top 20 verified facts
@@ -851,11 +966,15 @@ JSON 必須包含以下欄位：
         1. **戰略手卡 (Chairman's Handcard)**：
         {handcard if handcard else "(無戰略手卡)"}
 
-        2. **核心證據庫 (Verified Evidence)**：
+        2. **EDA 實證分析 (Automated Data Analysis)**：
+           *這是系統自動生成的數據分析報表，包含量化指標與視覺化圖表。*
+        {eda_summary}
+
+        3. **核心證據庫 (Verified Evidence)**：
            *這是經過系統核實的單一事實來源 (SSOT)，權重最高。*
         {evidence_block}
 
-        3. **辯論過程摘要**：
+        4. **辯論過程摘要**：
         {summary_text}
 
         ### 你的任務

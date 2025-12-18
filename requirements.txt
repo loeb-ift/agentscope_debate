@@ -16,3 +16,8 @@ requests
 qdrant-client
 ollama
 python-dotenv
+# EDA dependencies
+ydata-profiling
+pandas
+matplotlib
+seaborn

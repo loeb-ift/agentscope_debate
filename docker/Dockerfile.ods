@@ -1,0 +1,37 @@
+# Use official Python image
+FROM python:3.10-slim
+
+# Install system dependencies
+# - gcc, python3-dev: for compiling some python packages
+# - curl: for testing
+# - fonts-noto-cjk: for Chinese character support in matplotlib
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    curl \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install Python data science libraries
+RUN pip install --no-cache-dir \
+    pandas \
+    numpy \
+    matplotlib \
+    seaborn \
+    scikit-learn \
+    requests \
+    rich \
+    yfinance \
+    openpyxl
+
+# Create a directory for charts/outputs
+RUN mkdir -p /app/charts
+
+# Set environment variables for Matplotlib to use non-interactive backend
+ENV MPLBACKEND=Agg
+
+# Command to keep container running (we will exec into it)
+CMD ["tail", "-f", "/dev/null"]

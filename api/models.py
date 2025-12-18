@@ -184,6 +184,10 @@ class EvidenceDoc(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     ttl_expiry = Column(DateTime(timezone=True), nullable=True) # When this evidence becomes STALE
+    
+    # EDA Artifact Support (NEW)
+    artifact_type = Column(String(20), nullable=True)  # "report", "plot", "table", or None for regular evidence
+    file_path = Column(String(500), nullable=True)     # Absolute path to artifact file (for EDA reports/plots/tables)
 
 class Checkpoint(Base):
     """

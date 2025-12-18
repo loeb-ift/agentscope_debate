@@ -3,3 +3,9 @@ gradio
 requests
 sseclient-py
 pandas
+redis
+jsonschema
+yfinance
+python-dotenv
+tenacity
+sqlalchemy

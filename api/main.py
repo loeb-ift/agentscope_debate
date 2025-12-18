@@ -102,6 +102,14 @@ async def startup_event():
     tool_registry.register(DuckDuckGoAdapter())
     tool_registry.register(YFinanceAdapter())
     
+    # Register ODS Internal Adapter
+    from adapters.ods_internal_adapter import ODSInternalAdapter
+    tool_registry.register(ODSInternalAdapter())
+    
+    # Register EDA Tool Adapter (Chairman Only)
+    from adapters.eda_tool_adapter import EDAToolAdapter
+    tool_registry.register(EDAToolAdapter())
+    
     # ChinaTimes Suite (Conditional)
     if Config.ENABLE_CHINATIMES_TOOLS:
         print("📰 Registering ChinaTimes tools...")
@@ -158,6 +166,7 @@ from api.tool_routes import router as tool_router
 from api.internal_api import router as internal_router
 from api.toolset_routes import router as toolset_router
 from api.routers.cache_management import router as cache_router
+from api.routers.eda_routes import router as eda_router
 
 app.include_router(agent_router)
 app.include_router(debate_router)
@@ -166,6 +175,8 @@ app.include_router(tool_router)
 app.include_router(internal_router)
 app.include_router(toolset_router)
 app.include_router(cache_router, prefix="/api/v1")
+app.include_router(eda_router)
+
 
 # Health check endpoint
 @app.get("/health")

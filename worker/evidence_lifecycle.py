@@ -156,6 +156,56 @@ class EvidenceLifecycle:
             ).order_by(EvidenceDoc.created_at.desc()).limit(limit).all()
         finally:
             db.close()
+    
+    def ingest_eda_artifact(
+        self,
+        agent_id: str,
+        artifact_type: str,  # "report", "plot", "table"
+        file_path: str,
+        metadata: Dict[str, Any]
+    ) -> EvidenceDoc:
+        """
+        Ingest an EDA artifact (report/plot/table) as a VERIFIED EvidenceDoc.
+        
+        Args:
+            agent_id: ID of the agent that generated this artifact (usually Chairman)
+            artifact_type: Type of artifact ("report", "plot", "table")
+            file_path: Absolute path to the artifact file
+            metadata: Metadata from EDA analysis (rows, cols, missing_rate, etc.)
+            
+        Returns:
+            Created EvidenceDoc
+        """
+        db = SessionLocal()
+        try:
+            # Generate hash based on file path
+            inputs_hash = hashlib.md5(f"eda:{artifact_type}:{file_path}".encode()).hexdigest()
+            
+            doc = EvidenceDoc(
+                debate_id=self.debate_id,
+                agent_id=agent_id,
+                tool_name="ods.eda_describe",
+                params={"artifact_type": artifact_type, "file_path": file_path},
+                content=metadata,
+                inputs_hash=inputs_hash,
+                status="VERIFIED",  # EDA artifacts are pre-verified by gate checker
+                trust_score=90,  # High trust for system-generated artifacts
+                artifact_type=artifact_type,
+                file_path=file_path,
+                verification_log=[{
+                    "event": "ingest_eda_artifact",
+                    "timestamp": datetime.now().isoformat(),
+                    "note": f"EDA {artifact_type} artifact ingested and verified"
+                }],
+                ttl_expiry=datetime.now() + timedelta(hours=24)  # EDA artifacts expire after 24h
+            )
+            
+            db.add(doc)
+            db.commit()
+            db.refresh(doc)
+            return doc
+        finally:
+            db.close()
 
     def create_checkpoint(self, step_name: str, context: Dict, next_actions: Dict = None) -> Checkpoint:
         """

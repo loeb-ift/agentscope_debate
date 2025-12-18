@@ -29,9 +29,14 @@ class LLMProvider:
 
 class OllamaProvider(LLMProvider):
     def __init__(self):
-        self.host = Config.OLLAMA_HOST
-        if self.host and not self.host.startswith(("http://", "https://")):
+        self.host = getattr(Config, "OLLAMA_HOST", "http://localhost:11434")
+        if not self.host:
+             self.host = "http://localhost:11434"
+             
+        if not self.host.startswith(("http://", "https://")):
             self.host = f"http://{self.host}"
+        
+        self.host = self.host.rstrip("/")
         
         # Check for container environment
         if self.host and ("0.0.0.0" in self.host or "localhost" in self.host or "127.0.0.1" in self.host):
