@@ -81,9 +81,21 @@
    docker-compose ps
    ```
    您應該會看到 `api`, `worker`, `web`, `redis`, `searxng` 等服務的狀態為 `running` 或 `up`。
-
-
-### 服務端口
+   
+   ### ⚙️ 初始化與自動化流程
+   系統在部署時會自動執行以下初始化動作，確保環境開箱即用：
+   
+   1.  **資料庫自動建立**: 啟動時會自動執行 `init_db()`，建立所有必要的資料表。
+   2.  **種子資料導入 (Seeding)**: 系統會讀取 `data/seeds/` 下的 JSON 檔案，自動導入初始的公司名冊、證券代碼與專業財務術語。
+   3.  **Agent 註冊**: 自動在資料庫中註冊各類專業 Agent (如主席、分析師、審核員)。
+   4.  **工具集配置**: 初始化 ToolSet 配置，並根據 `.env` 設定啟用對應的外部適配器。
+   
+   *如果您需要手動重新初始化，可以在 API 容器中執行：*
+   ```bash
+   docker-compose exec api python seed_db.py
+   ```
+   
+   ### 服務端口
 - **API 服務**: http://localhost:8000
 - **Web 前端**: http://localhost:7860
 - **SearXNG**: http://localhost:8888
