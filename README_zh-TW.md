@@ -37,12 +37,12 @@
 - **Gradio Web App**: 直觀的 Web 介面，支援辯論配置和即時監控
 - **即時狀態更新**: 自動輪詢和 SSE 串流顯示辯論進度
 
-### 工具整合
-- **SearXNG Adapter**: 隱私保護的網路搜尋
-- **DuckDuckGo Adapter**: 即時網路資訊檢索
-- **YFinance Adapter**: 股票市場資料查詢
-- **TEJ Adapter**: 台灣經濟新報專業金融資料
-- **Python Tool Adapter**: 自定義 Python 工具執行
+### 工具整合 (Toolset Ecosystem)
+- **數據運算 (ODS/OSU)**: 底層量化運算服務，處理 CSV 並產出統計圖表
+- **事實查核 (Verifiers)**: 提供 `financial.get_verified_price` 進行多源數據驗證
+- **金融套件**: 整合 TEJ 專業數據、TWSE 官方數據與 Yahoo Finance
+- **搜尋路由**: 智能分流 Google CSE (高品質) 與 SearXNG (免費) 搜尋
+- **實體關係**: 查詢集團母子公司關係與產業鏈上下游
 
 ## 🚀 快速開始
 
@@ -178,11 +178,37 @@ python3 -m pytest tests/unit/
   - **時間錨定**: 統一資料庫有效時間，防止幻覺
   - **論證標準**: 設定高分審查框架（如必須包含 CAPM）
 
-### 工具整合
-- **即時搜尋**: 網路資訊即時檢索
-- **金融資料**: 專業金融市場數據
-- **自定義工具**: Python 程式碼執行能力
-- **隱私保護**: 搜尋隱私保護機制
+### 工具與數據生態 (Toolset & OSU)
+
+本平台採用 **數據與邏輯分離** 的架構，透過 **Operational Storage Unit (OSU)** 確保數據的公信力與處理效能。
+
+#### 1. 詳細工具清單
+| 模組 | 關鍵工具名稱 | 核心功能 |
+| :--- | :--- | :--- |
+| **自動化分析** | `chairman.eda_analysis` | 辯論開始時自動拉取數據並生成 EDA 報表 |
+| **數據運算** | `ods.eda_describe` | 底層 OSU 數據處理，產生統計圖與缺失值分析 |
+| **事實查核** | `financial.get_verified_price` | 交叉比對 TEJ/TWSE/Yahoo 產出公信力股價 |
+| **金融分析** | `tej.financial_summary` | 獲取標準化財報、法人持股與會計科目 |
+| **智能檢索** | `search.router` | 根據角色自動路由至 Google CSE 或 SearXNG |
+| **集團實體** | `internal.get_industry_tree` | 查詢公司所屬產業鏈與集團關聯實體 |
+
+#### 2. OSU 數據流轉邏輯
+為了在有限的 Token 限制下處理大量金融數據，系統實作了 **「數據在 OSU 流轉，Agent 在 Context 引用」** 的機制：
+
+1.  **數據攝取 (Ingestion)**: 適配器將抓取的原始數據 (CSV) 存入 OSU 磁碟空間。
+2.  **證據註冊**: 系統透過 `EvidenceLifecycle` 為該數據註冊唯一 Evidence ID。
+3.  **ODS 分析**: `ods.eda_describe` 讀取 OSU 檔案，產出視覺化圖表與摘要，並更新 Metadata。
+4.  **Agent 引用**: Agent 的上下文僅持有證據 ID 與摘要路徑，發言時透過 ID 進行精準引用（如 `[Ref: ev_eda_001]`）。
+
+#### 3. 證據生命週期管理 (Evidence Lifecycle)
+系統透過 `worker/evidence_lifecycle.py` 實作了嚴格的證據狀態機，確保數據流轉的透明性：
+
+- **Ingest (寫入)**: 原始數據進入 OSU，建立 `DRAFT` 證據，並透過 `inputs_hash` (MD5) 自動去重。
+- **Verify (驗證)**: 執行 **數據誠信檢查 (Data Honesty)**。若數據為空或錯誤則隔離 (`QUARANTINE`)，通過則標記為 `VERIFIED` 並分配 **TTL (生存時間)**。
+- **Aging (老化)**: 定期將過期證據轉為 `STALE`，強制 Agent 重新獲取最新市場數據。
+- **Citation (引用)**: 透過 `create_checkpoint` 鎖定當前辯論的所有 `VERIFIED` ID，實現「事實錨定」。
+
+![工具架構圖](diagrams/exports/tool_architecture.svg)
 
 ## 🔧 維護與部署
 
