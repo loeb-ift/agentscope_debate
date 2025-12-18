@@ -4,12 +4,21 @@
 import sys
 sys.path.insert(0, '/app')
 
+import os
 from api.database import engine
 import sqlite3
 
 def migrate_tools_table():
     """為 tools 表添加新字段"""
-    conn = sqlite3.connect('/app/data/debate.db')
+    # 使用環境變數或預設路徑
+    db_env = os.getenv('DATABASE_URL', 'sqlite:///./data/debate.db')
+    if db_env.startswith('sqlite:///'):
+        db_path = db_env.replace('sqlite:///', '')
+    else:
+        db_path = './data/debate.db'
+    
+    print(f"Connecting to: {db_path}")
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     # 檢查字段是否已存在
