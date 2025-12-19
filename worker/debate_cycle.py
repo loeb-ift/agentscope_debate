@@ -1566,14 +1566,15 @@ class DebateCycle:
                             # This forces the Agent to process a "result" and move on, rather than ignoring the system prompt.
                             fake_result = {
                                 "error": "Loop Detected: You have already called this tool with these exact parameters.",
-                                "suggestion": "Please modify your parameters (e.g., change keyword, date range) or use a different tool."
+                                "suggestion": "Please modify your parameters (e.g., change keyword, date range) or use a different tool. If you cannot find data, please report 'No Data' and move to conclusion."
                             }
                             
                             current_prompt = f"""工具 {tool_name} 的執行結果 (系統攔截)：
 {json.dumps(fake_result, ensure_ascii=False, indent=2)}
 
 【系統提示】
-請根據上述錯誤訊息調整你的策略。不要再次嘗試相同的調用。
+1. 嚴禁重複調用相同參數的工具。
+2. 若連續多次無法取得數據，說明你遇到了知識缺口，並立即發表本輪總結，不要再嘗試調用工具。
 """
                             # [Observability] Log Metric
                             print(f"[LOOP_DETECTED] agent={agent.name} tool={tool_name} type=history_repeat")
