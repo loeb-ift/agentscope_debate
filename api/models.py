@@ -188,6 +188,15 @@ class EvidenceDoc(Base):
     # EDA Artifact Support (NEW)
     artifact_type = Column(String(20), nullable=True)  # "report", "plot", "table", or None for regular evidence
     file_path = Column(String(500), nullable=True)     # Absolute path to artifact file (for EDA reports/plots/tables)
+    
+    # Missing columns for check_sqlite_schema compatibility
+    title = Column(Text, nullable=True)
+    source = Column(Text, nullable=True)
+    snippet = Column(Text, nullable=True)
+    fulltext_ref = Column(Text, nullable=True)
+    timestamp = Column(DateTime(timezone=True), nullable=True)
+    tool = Column(Text, nullable=True)
+    citations = Column(JSON, nullable=True)
 
 class Checkpoint(Base):
     """
@@ -209,5 +218,8 @@ class Checkpoint(Base):
     # Lease / Token
     lease_token = Column(String(64), nullable=True)
     lease_expiry = Column(DateTime(timezone=True), nullable=True)
+    
+    # Missing columns for check_sqlite_schema compatibility
+    plan_node_id = Column(String(100), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

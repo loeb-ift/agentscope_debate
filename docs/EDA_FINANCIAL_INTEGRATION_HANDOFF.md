@@ -31,27 +31,30 @@
 ## 📂 關鍵檔案
 
 ### 主要實作檔案
-1. `/Users/loeb/Desktop/agentscope_debate/adapters/eda_tool_adapter.py`
+1. `adapters/eda_tool_adapter.py`
    - EDA 工具主邏輯
-   - 需新增財務數據拉取方法
+   - 已支援財務數據整合，並提供 `_invoke_async` 流程
 
-2. `/Users/loeb/Desktop/agentscope_debate/api/eda_service.py`
+2. `api/eda_service.py`
    - EDA 分析服務
-   - 需擴展支援財務數據
+   - 擴展支援財務數據
 
-3. `/Users/loeb/Desktop/agentscope_debate/worker/eda_gate_checker.py`
+3. `worker/eda_gate_checker.py`
    - 品質檢查
-   - 需新增財務數據驗證
+   - 新增財務數據驗證
 
-### 測試檔案
-4. `/Users/loeb/Desktop/agentscope_debate/tests/test_eda_financials.py`
-   - 新建：財務整合測試
+### 測試與驗證腳本
+4. `scripts/tests/test_eda_financials.py`
+   - 財務整合測試（pytest）
+
+5. `scripts/verify_eda_financial_integration.py`
+   - 手動整合驗證（已合併 v2，使用同步 mock 並避免 DB I/O）
 
 ### 文檔檔案
-5. `/Users/loeb/Desktop/agentscope_debate/docs/CHAIRMAN_EDA_TOOL_GUIDE.md`
-   - 需更新：新增財務數據說明
+6. `docs/CHAIRMAN_EDA_TOOL_GUIDE.md`
+   - 更新：新增財務數據說明
 
-6. `/Users/loeb/Desktop/agentscope_debate/docs/EDA_DATA_SOURCES_INVENTORY.md`
+7. `docs/EDA_DATA_SOURCES_INVENTORY.md`
    - 參考：可用數據來源清單
 
 ---
@@ -100,28 +103,26 @@
 
 ### 1. 環境準備
 ```bash
-cd /Users/loeb/Desktop/agentscope_debate
-source venv/bin/activate  # 如果使用虛擬環境
+# 於專案根目錄執行
+python -m venv .venv && source .venv/bin/activate  # Windows 使用 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ### 2. 查看當前進度
 ```bash
-# 查看任務清單
-cat /Users/loeb/.gemini/antigravity/brain/99cc6caa-42cf-4424-b0dd-0c66fdfcdb2d/task.md
-
-# 查看實作計劃
-cat /Users/loeb/.gemini/antigravity/brain/99cc6caa-42cf-4424-b0dd-0c66fdfcdb2d/implementation_plan.md
+# 檢視相關文檔與待辦
+ls docs/
+# 若使用 Jira/Confluence，請參考團隊的追蹤系統
 ```
 
 ### 3. 運行測試
 ```bash
-# 運行現有測試
-python -m pytest tests/test_eda_service.py -v
-python -m pytest tests/test_eda_gate_checker.py -v
+# 運行現有測試（pytest）
+pytest -q scripts/tests/test_eda_service.py -q
+pytest -q scripts/tests/test_eda_gate_checker.py -q
 
-# 運行財務整合測試（待創建）
-python -m pytest tests/test_eda_financials.py -v
+# 運行財務整合測試
+pytest -q scripts/tests/test_eda_financials.py -q
 ```
 
 ### 4. 開始實作

@@ -19,3 +19,6 @@ pandas
 matplotlib
 seaborn
 ydata-profiling
+# pandas-ta
+pandas_ta_classic
+pandas-datareader

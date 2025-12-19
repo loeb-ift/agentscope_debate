@@ -8,6 +8,35 @@ import os
 
 API_URL = os.getenv("API_URL", "http://api:8000/api/v1")
 
+# --- Robust API Client ---
+DEFAULT_TIMEOUT = 10
+
+def _api_request(method, url, **kwargs):
+    """統一的 API 請求處理，加入超時與異常捕捉"""
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = DEFAULT_TIMEOUT
+    
+    try:
+        response = requests.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.Timeout:
+        print(f"❌ API Timeout: {method} {url}")
+        raise gr.Error(f"後端請求超時 ({kwargs['timeout']}s)，請稍後再試。")
+    except requests.exceptions.ConnectionError:
+        print(f"❌ API Connection Error: {method} {url}")
+        raise gr.Error("無法連線至後端服務，請檢查 API 伺服器狀態。")
+    except Exception as e:
+        print(f"❌ API Error: {method} {url} - {str(e)}")
+        # 提取更具體的錯誤訊息（如果是 API 返回的 JSON 錯誤）
+        error_detail = str(e)
+        try:
+            if hasattr(e, 'response') and e.response is not None:
+                error_detail = e.response.json().get('detail', str(e))
+        except:
+            pass
+        raise gr.Error(f"後端服務出錯: {error_detail}")
+
 # --- Global Cache for Core Data ---
 _CORE_DATA_CACHE = {
     "agents": {"data": None, "timestamp": 0},
@@ -16,48 +45,40 @@ _CORE_DATA_CACHE = {
     "securities": {"data": None, "timestamp": 0},
     "financial_terms": {"data": None, "timestamp": 0}
 }
-CACHE_TTL = 60  # 60 seconds cache (increased from 30)
+CACHE_TTL = 60  # 60 seconds cache
 
-def _get_cached_or_fetch(cache_key, fetch_url, timeout=5):
+def _get_cached_or_fetch(cache_key, fetch_url, timeout=DEFAULT_TIMEOUT):
     """通用緩存獲取函數"""
     import time
     now = time.time()
     cache = _CORE_DATA_CACHE.get(cache_key)
     
     # 如果緩存有效，直接返回
-    # Modify: If data is empty list/dict, reduce TTL to 5s to allow quick retry on startup
     ttl = CACHE_TTL
-    if cache and not cache["data"]: # Empty list/dict or None
-        ttl = 5
+    if cache and not cache["data"]:
+        ttl = 5 # 失敗或空數據時，快速重試
         
     if cache and cache["data"] is not None and (now - cache["timestamp"]) < ttl:
-        print(f"DEBUG: Using cached {cache_key} (TTL: {ttl}s)", flush=True)  # noqa
         return cache["data"]
     
-    # 如果有舊緩存且距離上次失敗不到 10 秒，直接使用舊緩存避免頻繁重試
-    # 修正：只有當 data 不為 None 時才使用舊緩存。如果 data 是 None (第一次就失敗)，應該允許立即重試。
+    # 最近 10 秒內出過錯，則使用舊數據
     if cache and cache["data"] is not None and (now - cache.get("last_error_time", 0)) < 10:
-        print(f"DEBUG: Using stale cache for {cache_key} (recent error)", flush=True)
         return cache["data"]
     
     # 否則重新獲取
     try:
-        print(f"DEBUG: Fetching fresh {cache_key} from API...", flush=True)
+        # 這裡不使用 _api_request 因為它是背景加載，不應拋出 gr.Error 彈窗阻塞用戶操作
         response = requests.get(fetch_url, timeout=timeout)
         response.raise_for_status()
         data = response.json()
         
-        # 更新緩存
         _CORE_DATA_CACHE[cache_key] = {"data": data, "timestamp": now, "last_error_time": 0}
         return data
     except Exception as e:
         print(f"ERROR fetching {cache_key}: {e}", flush=True)
-        # 記錄錯誤時間
         if cache:
             cache["last_error_time"] = now
-        # 如果有舊緩存，即使過期也返回
         if cache and cache["data"] is not None:
-            print(f"WARNING: Using stale cache for {cache_key}", flush=True)
             return cache["data"]
         return None
 
@@ -140,11 +161,12 @@ def create_agent(name, role, specialty, system_prompt, config_json_str):
             "system_prompt": system_prompt,
             "config_json": config_json
         }
-        response = requests.post(f"{API_URL}/agents", json=payload)
-        response.raise_for_status()
-        return f"Agent '{name}' created successfully!"
+        _api_request("POST", f"{API_URL}/agents", json=payload)
+        return f"✅ Agent '{name}' 創建成功！"
+    except json.JSONDecodeError:
+        return "❌ 錯誤：JSON 格式無效"
     except Exception as e:
-        return f"Error creating agent: {e}"
+        return f"❌ 錯誤：{str(e)}"
 
 def update_agent(agent_id, name, role, specialty, system_prompt, config_json_str):
     try:
@@ -156,20 +178,21 @@ def update_agent(agent_id, name, role, specialty, system_prompt, config_json_str
             "system_prompt": system_prompt,
             "config_json": config_json
         }
-        response = requests.put(f"{API_URL}/agents/{agent_id}", json=payload)
-        response.raise_for_status()
-        return f"Agent '{name}' updated successfully!"
+        _api_request("PUT", f"{API_URL}/agents/{agent_id}", json=payload)
+        return f"✅ Agent '{name}' 更新成功！"
+    except json.JSONDecodeError:
+        return "❌ 錯誤：JSON 格式無效"
     except Exception as e:
-        return f"Error updating agent: {e}"
+        return f"❌ 錯誤：{str(e)}"
 
 def delete_agent(agent_id):
     try:
         agent_id = extract_id_from_dropdown(agent_id)
-        response = requests.delete(f"{API_URL}/agents/{agent_id}")
-        response.raise_for_status()
-        return "Agent deleted successfully!"
+        if not agent_id: return "⚠️ 請先選擇 Agent"
+        _api_request("DELETE", f"{API_URL}/agents/{agent_id}")
+        return "✅ Agent 刪除成功！"
     except Exception as e:
-        return f"Error deleting agent: {e}"
+        return f"❌ 刪除失敗：{str(e)}"
 
 def get_agent_choices(role=None):
     agents = get_agents(role)
@@ -243,26 +266,17 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         }
         
         print(f"DEBUG: Creating config...", flush=True)
-        # Timeout 10s for config creation
-        config_res = requests.post(f"{API_URL}/debates/config", json=config_payload, timeout=10)
+        config_res = _api_request("POST", f"{API_URL}/debates/config", json=config_payload)
         
-        if config_res.status_code != 201:
-            return f"建立設定失敗: {config_res.text}", None, "❌ 設定建立失敗"
-            
-        config_res.raise_for_status()
         config_id = config_res.json()["id"]
         print(f"DEBUG: Config created ID: {config_id}. Launching...", flush=True)
         
-        # Timeout 10s for launch
-        launch_res = requests.post(f"{API_URL}/debates/launch?config_id={config_id}", timeout=10)
-        launch_res.raise_for_status()
+        launch_res = _api_request("POST", f"{API_URL}/debates/launch?config_id={config_id}")
         
         task_id = launch_res.json()['task_id']
         print(f"DEBUG: Launch success. Task ID: {task_id}", flush=True)
-        return f"辯論已啟動！任務 ID: {task_id}", task_id, "⏳ 正在初始化辯論環境..."
+        return f"✅ 辯論已啟動！", task_id, "⏳ 正在初始化辯論環境..."
         
-    except requests.exceptions.Timeout:
-        return "請求超時：API 回應過慢，請檢查後端日誌。", None, "❌ 請求超時"
     except Exception as e:
         print(f"ERROR launching debate: {e}", flush=True)
         import traceback
@@ -270,133 +284,79 @@ def launch_debate_config(topic, chairman_id, rounds, pro_team_id, con_team_id, n
         return f"啟動失敗: {str(e)}", None, f"啟動失敗: {str(e)}"
 
 def stream_debate_log(task_id):
+    """流式獲取辯論日誌，加入節流與錯誤捕捉"""
     print(f"DEBUG: stream_debate_log called with task_id: {task_id}", flush=True)
+
+    def _get_ui_meta(role: str, content: str):
+        icon = "📢"
+        status_msg = f"▶️ {role} 正在發言..."
+        role_lower = role.lower()
+        if "chairman" in role_lower or "主席" in role:
+            icon = "👨‍⚖️"; status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
+        elif "pro" in role_lower or "正方" in role:
+            icon = "🟦"; status_msg = f"🟦 正方 {role} 正在陳述觀點..."
+        elif "con" in role_lower or "反方" in role:
+            icon = "🟥"; status_msg = f"🟥 反方 {role} 正在進行反駁..."
+        elif "neutral" in role_lower or "中立" in role:
+            icon = "🟩"; status_msg = f"🟩 中立觀點 {role} 正在分析..."
+        elif "tool" in role_lower or "工具" in role:
+            icon = "🛠️"; status_msg = f"🛠️ 系統正在調用工具..."
+        elif "thinking" in role_lower or "思考" in role:
+            icon = "💭"; status_msg = f"💭 {role} 正在思考..."
+        elif "system" in role_lower:
+            icon = "🖥️"
+        return icon, status_msg
+
     if not task_id:
         yield "無任務 ID", "❌ 無效的任務 ID", ""
         return
 
     try:
-        # Initial status (Force Yield immediately)
         yield "正在連接後端服務...", "🚀 初始化連接...", "📊 連線中..."
-        
-        # Use requests with stream=True for robust SSE handling
-        print(f"[DEBUG STREAM] Connecting to {API_URL}/debates/{task_id}/stream", flush=True)
-        
-        # Add timeout for connection (connect=10, read=None for streaming)
         with requests.get(f"{API_URL}/debates/{task_id}/stream", stream=True, timeout=(10, None)) as response:
             if response.status_code != 200:
-                yield f"Error: Backend returned {response.status_code}", "❌ 連線失敗", "停止"
+                yield "❌ 連線失敗", "停止", "停止"
                 return
 
-            history_list = [] # Store individual entries
-            MAX_DISPLAY_ITEMS = 30
+            history_list = []
+            MAX_DISPLAY_ITEMS = 25
+            last_yield = 0
             
-            # Use iterator to handle timeouts if needed, but requests iter_lines is blocking.
-            # We trust the backend to send keepalives (usage updates).
             for line in response.iter_lines():
-                if line:
-                    decoded_line = line.decode('utf-8')
-                    if decoded_line.startswith("data: "):
-                        json_str = decoded_line[6:] # Removing "data: " prefix
-                        # print(f"DEBUG STREAM: {json_str[:100]}...", flush=True)
-                        if json_str.strip() == "[DONE]":
-                            display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
-                            if len(history_list) > MAX_DISPLAY_ITEMS:
-                                display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
-                            yield display_md, "🏁 辯論已圓滿結束。", gr.update()
-                            break
-                        try:
-                            # print(f"DEBUG: raw json chunk: {json_str[:50]}...", flush=True)
-                            data = json.loads(json_str)
-                            
-                            # Handle Progress Update Event
-                            if data.get("type") == "progress_update":
-                                progress = data.get("progress", 0)
-                                msg = data.get("message", "")
-                                stage = data.get("stage", "")
-                                yield gr.update(), f"⏳ {msg} ({progress}%)", gr.update()
-                                continue
-
-                            # Handle Score Update Event
-                            if data.get("type") == "score_update":
-                                side = data.get("side")
-                                new_score = data.get("new_score")
-                                delta = data.get("delta")
-                                reason = data.get("reason")
-                                
-                                icon = "⚖️"
-                                delta_str = f"+{delta}" if delta > 0 else f"{delta}"
-                                score_msg = f"**{icon} 評分更新**：【{side}】 {delta_str} 分 (當前: {new_score})\n> 原因：{reason}"
-                                
-                                entry = f"\n\n### {icon} System (Score)\n{score_msg}\n\n---"
-                                history_list.append(entry)
-                                
-                                # Render
-                                display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
-                                if len(history_list) > MAX_DISPLAY_ITEMS:
-                                    display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
-                                    
-                                yield display_md, f"⚖️ 評分更新: {side} {delta_str}", gr.update()
-                                continue
-                            
-                            # Handle Usage Update Event
-                            if data.get("type") == "usage_update":
-                                tokens = data.get("tokens", 0)
-                                cost = data.get("cost", 0.0)
-                                search_count = data.get("search_count", 0)
-                                usage_msg = f"### 📊 成本監控\n- **Tokens**: {tokens:,}\n- **Cost**: ${cost:.4f}\n- **Search**: {search_count} calls"
-                                yield gr.update(), gr.update(), usage_msg
-                                continue
-                            
-                            role = data.get("role", "System")
-                            content = data.get("content", "")
-                            
-                            icon = "📢"
-                            status_msg = f"▶️ {role} 正在發言..."
-                            
-                            if "Chairman" in role or "主席" in role:
-                                icon = "👨‍⚖️"
-                                status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
-                                if "總結" in content or "結論" in content:
-                                    status_msg = "👨‍⚖️ 主席正在進行總結..."
-                            elif "Pro" in role or "正方" in role:
-                                icon = "🟦"
-                                status_msg = f"🟦 正方 {role} 正在陳述觀點..."
-                            elif "Con" in role or "反方" in role:
-                                icon = "🟥"
-                                status_msg = f"🟥 反方 {role} 正在進行反駁..."
-                            elif "Neutral" in role or "中立" in role:
-                                icon = "🟩"
-                                status_msg = f"🟩 中立觀點 {role} 正在分析..."
-                            elif "Tool" in role or "工具" in role:
-                                icon = "🛠️"
-                                status_msg = f"🛠️ 系統正在調用工具: {role}..."
-                            elif "Thinking" in role or "思考" in role:
-                                icon = "💭"
-                                status_msg = f"💭 {role.replace('(Thinking)', '').strip()} 正在思考中..."
-                            elif "System" in role:
-                                icon = "🖥️"
-                            
-                            
-                            entry = f"\n\n### {icon} {role}\n{content}\n\n---"
-                            history_list.append(entry)
-                            
-                            # Debug log before yield
-                            # print(f"[DEBUG STREAM] Yielding update. MD Len: {len(history_md)}, Status: {status_msg}", flush=True)
-                            
-                            # Render window
-                            display_md = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
-                            if len(history_list) > MAX_DISPLAY_ITEMS:
-                                display_md = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息，完整內容請下載報告) ...*\n\n" + display_md
-
-                            yield display_md, status_msg, gr.update()
-                        except json.JSONDecodeError:
-                            pass
-                        except Exception as inner_e:
-                            print(f"[DEBUG STREAM] Inner Loop Error: {inner_e}", flush=True)
+                if not line: continue
+                decoded = line.decode('utf-8')
+                if not decoded.startswith("data: "): continue
+                
+                json_str = decoded[6:]
+                if json_str.strip() == "[DONE]":
+                    yield "\n".join(history_list[-MAX_DISPLAY_ITEMS:]), "🏁 辯論已結束。", gr.update()
+                    break
+                    
+                try:
+                    data = json.loads(json_str)
+                    if data.get("type") == "progress_update":
+                        yield gr.update(), f"⏳ {data.get('message')} ({data.get('progress')}%)", gr.update()
+                        continue
+                    if data.get("type") == "usage_update":
+                        yield gr.update(), gr.update(), f"### 📊 成本監控\n- **Tokens**: {data.get('tokens'):,}\n- **Cost**: ${data.get('cost'):.4f}"
+                        continue
+                    
+                    # 對話或評分
+                    role = data.get("role", "System")
+                    content = data.get("content", "")
+                    icon, status = _get_ui_meta(role, content)
+                    history_list.append(f"\n\n### {icon} {role}\n{content}\n\n---")
+                    
+                    # 節流 yield (每 300ms)
+                    if time.time() - last_yield > 0.3:
+                        display = "\n".join(history_list[-MAX_DISPLAY_ITEMS:])
+                        if len(history_list) > MAX_DISPLAY_ITEMS:
+                            display = f"*... (已隱藏前 {len(history_list)-MAX_DISPLAY_ITEMS} 條訊息) ...*\n\n" + display
+                        yield display, status, gr.update()
+                        last_yield = time.time()
+                except: pass
     except Exception as e:
-        print(f"[DEBUG STREAM] Outer Error: {e}", flush=True)
-        yield f"**Error connecting to stream:** {str(e)}", f"❌ 連線錯誤: {str(e)}", ""
+        yield f"**連線錯誤:** {str(e)}", "❌ 連線中斷", ""
 
 def list_prompts():
     try:
@@ -1115,11 +1075,13 @@ def main():
                         step3_next_btn.click(
                             launch_debate_config,
                             inputs=[topic_input, chairman_dropdown, rounds_slider, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown],
-                            outputs=[debate_status_output, task_id_state, live_log]
+                            outputs=[debate_status_output, task_id_state, live_log],
+                            show_progress=True
                         ).success(
                             stream_debate_log,
                             inputs=[task_id_state],
-                            outputs=[live_log, debate_status_output, stats_panel]
+                            outputs=[live_log, debate_status_output, stats_panel],
+                            show_progress=True
                         )
 
                         refresh_roles_btn.click(force_refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])

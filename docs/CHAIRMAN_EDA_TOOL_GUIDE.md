@@ -11,11 +11,12 @@
 
 這是一個**高階整合工具**，一次調用即可完成：
 
-1. ✅ 自動拉取股票歷史數據（Yahoo Finance）
+1. ✅ 自動拉取股票歷史數據（優先順序：ChinaTimes > Pandas-DataReader > Yahoo Finance）
 2. ✅ 生成完整 EDA 報表（ydata-profiling）
-3. ✅ 產生統計圖表（直方圖、相關矩陣、箱型圖）
-4. ✅ 品質檢查與驗證（Gate Check）
-5. ✅ 自動攝取到 Evidence 系統（VERIFIED 狀態）
+3. ✅ 計算技術指標（SMA, RSI, MACD, Bollinger Bands）透過 `pandas-ta-classic`
+4. ✅ 產生統計圖表（直方圖、相關矩陣、箱型圖）
+5. ✅ 品質檢查與驗證（Gate Check）
+6. ✅ 自動攝取到 Evidence 系統（VERIFIED 狀態）
 
 ---
 
@@ -33,7 +34,8 @@
 | 參數 | 類型 | 預設值 | 說明 |
 |------|------|--------|------|
 | `lookback_days` | integer | 120 | 回溯天數 |
-| `include_financials` | boolean | True | 是否包含財務報表分析（**新增**） |
+| `include_financials` | boolean | True | 是否包含財務報表分析 |
+| `include_technical` | boolean | True | 是否包含技術指標分析 (SMA, RSI, MACD, BBands) (預設 True) |
 
 ---
 
@@ -158,12 +160,16 @@ graph TD
     C -->|已存在| D[使用現有 CSV]
     C -->|不存在| E[Yahoo Finance 下載]
     
-    E -->|成功| D
-    E -->|失敗| Z2[返回: 數據準備失敗]
+    E -->|失敗| F1[Pandas-DataReader 下載]
+    F1 -->|成功| D
+    F1 -->|失敗| F2[Yahoo Finance 下載]
+    F2 -->|成功| D
+    F2 -->|失敗| Z2[返回: 數據準備失敗]
     
-    D --> F[調用 ODS EDA 服務]
-    F -->|成功| G[Gate 品質檢查]
-    F -->|失敗| Z3[返回: 服務調用失敗]
+    D --> G1[計算技術指標 (pandas-ta-classic)]
+    G1 --> H1[調用 ODS EDA 服務]
+    H1 -->|成功| G[Gate 品質檢查]
+    H1 -->|失敗| Z3[返回: 服務調用失敗]
     
     G -->|通過| H[攝取到 Evidence 系統]
     G -->|未通過| I[降級模式]

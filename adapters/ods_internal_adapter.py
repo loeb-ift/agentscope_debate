@@ -28,8 +28,10 @@ class ODSInternalAdapter(ToolAdapter):
         Args:
             base_url: Base URL of the API service. If None, uses localhost.
         """
-        self.base_url = base_url or os.getenv("API_BASE_URL", "http://localhost:8000")
+        # 優先使用傳入的 base_url，其次是環境變數，最後預設為 http://api:8000 (Docker 內部服務名稱)
+        self.base_url = base_url or os.getenv("API_BASE_URL", "http://api:8000")
         self.timeout = 120.0  # EDA can take time for large datasets
+        print(f"[ODSAdapter] Initialized with base_url: {self.base_url}")
     
     @property
     def name(self) -> str:

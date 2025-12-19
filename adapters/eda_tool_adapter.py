@@ -14,6 +14,7 @@ from typing import Dict, Any
 import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta
+import pandas_ta_classic as ta
 
 
 class EDAToolAdapter(ToolAdapter):
@@ -79,6 +80,11 @@ class EDAToolAdapter(ToolAdapter):
                     "type": "boolean",
                     "default": True,
                     "description": "是否包含財務報表分析（預設 True）"
+                },
+                "include_technical": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "是否包含技術指標分析（預設 True）"
                 }
             },
             "required": ["symbol", "debate_id"]
@@ -109,21 +115,28 @@ class EDAToolAdapter(ToolAdapter):
                 - artifacts: 產出檔案路徑
                 - error: 錯誤訊息（若失敗）
         """
-        # 使用 asyncio 運行異步邏輯
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    def invoke(self, **kwargs: Any) -> Dict[str, Any]:
+        """
+        執行 EDA 分析（同步包裝）。
+        """
         try:
-            result = loop.run_until_complete(self._invoke_async(**kwargs))
-            return result
-        finally:
-            loop.close()
+            # 檢查是否有正在運行的 event loop
+            asyncio.get_running_loop()
+            # 如果有，則在另一個執行緒中運行，避免 "loop already running" 錯誤
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(lambda: asyncio.run(self._invoke_async(**kwargs))).result()
+        except RuntimeError:
+            # 沒有正在運行的 loop，直接使用 asyncio.run
+            return asyncio.run(self._invoke_async(**kwargs))
     
     async def _invoke_async(self, **kwargs: Any) -> Dict[str, Any]:
         """異步執行 EDA 分析"""
         symbol = kwargs.get("symbol")
         debate_id = kwargs.get("debate_id")
         lookback_days = kwargs.get("lookback_days", 120)
-        include_financials = kwargs.get("include_financials", True)  # 新增參數
+        include_financials = kwargs.get("include_financials", True)
+        include_technical = kwargs.get("include_technical", True)  # 新增
         
         if not symbol or not debate_id:
             return {
@@ -137,7 +150,11 @@ class EDAToolAdapter(ToolAdapter):
             csv_path = await self._prepare_stock_data_chinatimes(symbol, debate_id, lookback_days)
             
             if not csv_path:
-                print(f"[EDA Tool] ChinaTimes data retrieval failed, falling back to Yahoo Finance...")
+                print(f"[EDA Tool] ChinaTimes data retrieval failed, trying pandas-datareader...")
+                csv_path = await self._prepare_stock_data_pdr(symbol, debate_id, lookback_days)
+
+            if not csv_path:
+                print(f"[EDA Tool] PDR retrieval failed, falling back to Yahoo Finance...")
                 csv_path = await self._prepare_stock_data(symbol, debate_id, lookback_days)
             
             if not csv_path:
@@ -146,14 +163,20 @@ class EDAToolAdapter(ToolAdapter):
                     "error": "數據準備失敗：無法下載股票數據 (ChinaTimes & Yahoo Finance)"
                 }
             
-            # Step 1.5: 準備財務數據（新增）
+            # Step 1.5: 準備財務數據並合併到 CSV
             financial_data = None
             if include_financials:
                 financial_data = await self._prepare_financial_data_basic(symbol, debate_id)
                 if financial_data and financial_data.get("success"):
-                    print(f"[EDA Tool] ✓ Financial data prepared")
+                    print(f"[EDA Tool] ✓ Financial data prepared, merging to CSV...")
+                    csv_path = await self._merge_financial_data_to_csv(csv_path, financial_data)
                 else:
                     print(f"[EDA Tool] ⚠️ Financial data unavailable, continuing with price data only")
+            
+            # Step 1.6: 計算技術指標
+            if include_technical:
+                print(f"[EDA Tool] Calculating technical indicators for {symbol}...")
+                csv_path = await self._calculate_technical_indicators(csv_path)
             
             # Step 2: 調用 EDA 服務
             eda_artifacts = await self._invoke_eda_service(csv_path)
@@ -290,6 +313,60 @@ class EDAToolAdapter(ToolAdapter):
             
         except Exception as e:
             print(f"[EDA Tool] ChinaTimes processing failed: {e}")
+            return None
+
+    async def _prepare_stock_data_pdr(self, symbol: str, debate_id: str, lookback_days: int) -> str:
+        """
+        準備股票數據 CSV (使用 pandas-datareader)
+        """
+        # 使用本地 data 目錄
+        script_dir = Path(__file__).parent.parent
+        data_dir = script_dir / "data" / "staging" / debate_id
+        data_dir.mkdir(parents=True, exist_ok=True)
+        
+        csv_path = data_dir / f"{symbol}_pdr.csv"
+        
+        if csv_path.exists():
+            return str(csv_path)
+            
+        print(f"[EDA Tool] Fetching {symbol} data from pandas-datareader (stooq)...")
+        
+        try:
+            from worker.tool_invoker import call_tool
+            loop = asyncio.get_running_loop()
+            
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+            
+            result = await loop.run_in_executor(
+                None,
+                call_tool,
+                "financial.pdr_reader",
+                {"symbol": symbol, "start_date": start_date, "end_date": end_date, "source": "stooq"}
+            )
+            
+            if not result or result.get("error"):
+                print(f"[EDA Tool] PDR fetch failed: {result.get('error', 'Unknown')}")
+                return None
+                
+            data = result.get("data", [])
+            if not data:
+                return None
+                
+            import pandas as pd
+            df = pd.DataFrame(data)
+            
+            # 確保欄位小寫且包含必要項
+            df.columns = [c.lower() for c in df.columns]
+            
+            # 存檔
+            df.to_csv(csv_path, index=False)
+            print(f"[EDA Tool] PDR data saved: {len(df)} records")
+            
+            return str(csv_path)
+            
+        except Exception as e:
+            print(f"[EDA Tool] PDR processing failed: {e}")
             return None
 
     async def _prepare_stock_data(self, symbol: str, debate_id: str, lookback_days: int) -> str:
@@ -523,6 +600,107 @@ class EDAToolAdapter(ToolAdapter):
                     normalized[new_key] = None
         
         return normalized
+
+    async def _merge_financial_data_to_csv(self, csv_path: str, financial_data: dict) -> str:
+        """
+        將財務數據合併到價格 CSV 中
+        
+        Args:
+            csv_path: 原始價格 CSV 路徑
+            financial_data: 已準備好的財務數據
+            
+        Returns:
+            合併後的 CSV 路徑 (會覆蓋原檔)
+        """
+        try:
+            import pandas as pd
+            import numpy as np
+            
+            # 讀取 CSV
+            df = pd.read_csv(csv_path)
+            
+            # 準備要合併的欄位
+            # 這裡簡單處理：因為財務數據是單點數據（最新一季/年），我們將其擴展到整個時間序列
+            # 這樣 ydata-profiling 可以分析其與價格的相關性（雖然是常數，但可視化上有幫助）
+            # 更進階的做法是拉取歷史財報數據並根據日期 merge，但在 Option A 中先簡化處理
+            
+            fundamental = financial_data.get("fundamental", {})
+            ratios = financial_data.get("ratios", {})
+            
+            # 合併數據
+            merge_data = {**fundamental, **ratios}
+            
+            # 過濾掉非數值和 None
+            valid_data = {}
+            for k, v in merge_data.items():
+                if isinstance(v, (int, float)) and not pd.isna(v):
+                    valid_data[k] = v
+                    
+            if not valid_data:
+                print(f"[EDA Tool] No valid financial data to merge")
+                return csv_path
+                
+            # 將財務數據加入 DataFrame (作為常數欄位)
+            # 雖然是常數，但在短期回測 (120天) 中，季報數據通常是不變的
+            for col, val in valid_data.items():
+                df[col] = val
+                
+            # 儲存回 CSV
+            df.to_csv(csv_path, index=False)
+            print(f"[EDA Tool] Merged {len(valid_data)} financial columns to CSV")
+            
+            return csv_path
+            
+        except Exception as e:
+            print(f"[EDA Tool] Failed to merge financial data: {e}")
+            return csv_path
+    
+    async def _calculate_technical_indicators(self, csv_path: str) -> str:
+        """
+        使用 pandas-ta-classic 計算技術指標
+        
+        指標包含:
+        - SMA (20, 50)
+        - RSI (14)
+        - MACD (12, 26, 9)
+        - Bollinger Bands (20, 2)
+        """
+        try:
+            import pandas as pd
+            
+            df = pd.read_csv(csv_path)
+            
+            # 確保有必要的價格欄位
+            required = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required):
+                print(f"[EDA Tool] Missing price columns for technical indicators calculation")
+                return csv_path
+            
+            # 使用 pandas_ta 擴展
+            # 簡單移動平均線
+            df.ta.sma(length=20, append=True)
+            df.ta.sma(length=50, append=True)
+            
+            # 相對強弱指標
+            df.ta.rsi(length=14, append=True)
+            
+            # MACD
+            df.ta.macd(append=True)
+            
+            # 布林通道
+            df.ta.bbands(append=True)
+            
+            # 儲存回 CSV
+            df.to_csv(csv_path, index=False)
+            print(f"[EDA Tool] Technical indicators calculated and saved to CSV")
+            
+            return csv_path
+            
+        except Exception as e:
+            print(f"[EDA Tool] Failed to calculate technical indicators: {e}")
+            import traceback
+            traceback.print_exc()
+            return csv_path
     
     async def _invoke_eda_service(self, csv_path: str) -> dict:
         """調用 ODS EDA 服務"""
@@ -533,7 +711,13 @@ class EDAToolAdapter(ToolAdapter):
             
             params = {
                 "csv_path": csv_path,
-                "include_cols": ["date", "close", "volume", "high", "low"],
+                "include_cols": [
+                    "date", "close", "volume", "high", "low", 
+                    "pe_ratio", "pb_ratio", "roe", "eps", "dividend_yield",
+                    "SMA_20", "SMA_50", "RSI_14", 
+                    "MACDH_12_26_9", "MACD_12_26_9", "MACDs_12_26_9",
+                    "BBL_20_2.0", "BBM_20_2.0", "BBU_20_2.0"
+                ],
                 "sample": 50000,
                 "lang": "zh"
             }

@@ -24,7 +24,7 @@ class EDADescribeRequest(BaseModel):
     )
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "csv_path": "/data/staging/debate_001/2330.TW.csv",
                 "include_cols": ["date", "close", "volume"],
@@ -44,7 +44,7 @@ class EDAMetadata(BaseModel):
     engine: str = Field("ydata-profiling", description="EDA engine used")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "rows": 1250,
                 "cols": 5,
@@ -70,7 +70,7 @@ class EDADescribeResponse(BaseModel):
     meta: EDAMetadata = Field(..., description="Metadata about the analysis")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "report_path": "/data/reports/debate_001/eda_profile.html",
                 "plot_paths": [
@@ -102,7 +102,7 @@ class EDAQuickPlotsRequest(BaseModel):
     )
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "csv_path": "/data/staging/debate_001/2330.TW.csv",
                 "tasks": ["hist", "box", "scatter"]

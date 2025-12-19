@@ -6,7 +6,7 @@ class DynamicMCPTool:
     動態 MCP 工具封裝器。
     將 MCP Adapter 中的單一工具封裝成系統可識別的 Tool Object。
     """
-    def __init__(self, adapter, tool_name: str, tool_description: str, input_schema: Dict[str, Any], group: str = "mcp"):
+    def __init__(self, adapter, tool_name: str, tool_description: str, input_schema: Dict[str, Any], group: str = "mcp", requires_approval: bool = False):
         self.adapter = adapter
         self.name = tool_name
         self._description = tool_description
@@ -17,6 +17,7 @@ class DynamicMCPTool:
         self.auth_config = None
         self.rate_limit_config = {"limit": 5, "period": 60} # 預設保守限制
         self.cache_ttl = 300 # 5分鐘快取
+        self.requires_approval = requires_approval 
 
     def describe(self) -> str:
         return self._description

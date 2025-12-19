@@ -75,12 +75,50 @@ class EDAService:
         # Load CSV
         df = pd.read_csv(csv_path)
         
+        # Calculate Technical Indicators if pandas_ta is available
+        try:
+            import pandas_ta as ta
+            # Ensure index is datetime for TA
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                
+                # Simple Moving Averages
+                df['SMA_20'] = ta.sma(df['close'], length=20)
+                df['SMA_60'] = ta.sma(df['close'], length=60)
+                
+                # RSI
+                df['RSI_14'] = ta.rsi(df['close'], length=14)
+                
+                # MACD
+                macd = ta.macd(df['close'])
+                if macd is not None:
+                    df = pd.concat([df, macd], axis=1)
+                
+                # Bollinger Bands
+                bbands = ta.bbands(df['close'])
+                if bbands is not None:
+                    df = pd.concat([df, bbands], axis=1)
+                
+                # Reset index to keep date as column
+                df.reset_index(inplace=True)
+                
+        except ImportError:
+            pass  # Skip if pandas_ta not installed
+        except Exception as e:
+            print(f"Error calculating technical indicators: {e}")
+
         # Filter columns if specified
         if include_cols:
-            invalid_cols = set(include_cols) - set(df.columns)
-            if invalid_cols:
-                raise ValueError(f"Invalid columns: {invalid_cols}")
-            df = df[include_cols]
+            # Only filter columns that actually exist in the dataframe
+            # This allows requested columns to be optional (e.g. financial data might be missing)
+            available_cols = [c for c in include_cols if c in df.columns]
+            
+            # If we calculated technical indicators, include them automatically
+            ta_cols = [c for c in df.columns if any(x in c for x in ['SMA', 'RSI', 'MACD', 'BBL', 'BBM', 'BBU'])]
+            
+            final_cols = list(set(available_cols + ta_cols))
+            df = df[final_cols]
         
         # Sample if specified and dataset is large enough
         if sample and len(df) > sample:

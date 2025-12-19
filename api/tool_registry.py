@@ -10,6 +10,8 @@ from mars.types.errors import ToolRecoverableError
 from adapters.verified_price_adapter import VerifiedPriceAdapter
 from adapters.twse_adapter import TWSEStockDay
 from adapters.yahoo_adapter import YahooPriceAdapter
+from adapters.technical_analysis_adapter import TechnicalAnalysisAdapter
+from adapters.pandas_datareader_adapter import PandasDataReaderAdapter
 from adapters.chinatimes_suite import (
     ChinaTimesSearchAdapter,
     ChinaTimesStockRTAdapter,
@@ -123,11 +125,12 @@ class ToolRegistry:
             "auth_config": getattr(tool_instance, 'auth_config', None),
             "rate_limit_config": getattr(tool_instance, 'rate_limit_config', None),
             "cache_ttl": getattr(tool_instance, 'cache_ttl', None),
-            "error_mapping": getattr(tool_instance, 'error_mapping', None)
+            "error_mapping": getattr(tool_instance, 'error_mapping', None),
+            "requires_approval": getattr(tool_instance, 'requires_approval', False)
         }
         print(f"Tool '{tool_id}' registered successfully (group: {group}).")
 
-    def register_mcp_adapter(self, adapter, prefix: str = "mcp", version: str = "v1"):
+    def register_mcp_adapter(self, adapter, prefix: str = "mcp", version: str = "v1", requires_approval: bool = False):
         """
         註冊 MCP Adapter 中的所有工具。
         Adapter 必須支援 `invoke_tool_sync` 和 `list_tools` (async or sync).
@@ -143,7 +146,12 @@ class ToolRegistry:
              if hasattr(adapter, "list_tools_sync"):
                  tools = adapter.list_tools_sync()
              else:
-                 tools = asyncio.run(adapter.list_tools())
+                 try:
+                     tools = asyncio.run(adapter.list_tools())
+                 except RuntimeError:
+                     from concurrent.futures import ThreadPoolExecutor
+                     with ThreadPoolExecutor() as executor:
+                         tools = executor.submit(asyncio.run, adapter.list_tools()).result()
         except Exception as e:
             print(f"❌ Failed to list tools from MCP adapter: {e}")
             return
@@ -161,7 +169,8 @@ class ToolRegistry:
                 tool_name=t_name,
                 tool_description=t_desc,
                 input_schema=t_schema,
-                group=prefix
+                group=prefix,
+                requires_approval=requires_approval
             )
             
             # Register with prefix (e.g., av.TIME_SERIES_DAILY or just TIME_SERIES_DAILY if unique?)
@@ -499,6 +508,8 @@ tool_registry = ToolRegistry()
 tool_registry.register(VerifiedPriceAdapter(), version="v1", group="financial")
 tool_registry.register(TWSEStockDay(), version="v1", group="financial")
 tool_registry.register(YahooPriceAdapter(), version="v1", group="financial")
+tool_registry.register(TechnicalAnalysisAdapter(), version="v1", group="financial")
+tool_registry.register(PandasDataReaderAdapter(), version="v1", group="financial")
 
 # ChinaTimes Tools Registration
 tool_registry.register(ChinaTimesSearchAdapter(), version="v1", group="chinatimes")
@@ -576,4 +587,11 @@ except ImportError:
     pass
 except Exception as e:
     print(f"⚠️ Alpha Vantage MCP Registration Failed: {e}")
+
+# Register EDA Tools
+from adapters.ods_internal_adapter import ODSInternalAdapter
+from adapters.eda_tool_adapter import EDAToolAdapter
+
+tool_registry.register(ODSInternalAdapter(), version="v1", group="eda")
+tool_registry.register(EDAToolAdapter(), version="v1", group="eda")
 

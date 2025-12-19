@@ -40,6 +40,26 @@ class AlphaVantageMCPAdapter:
             tools = data.get("result", {}).get("tools", [])
             return tools
 
+    def list_tools_sync(self) -> List[Dict[str, Any]]:
+        """列出 Server 支援的所有工具 (同步)"""
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "params": {},
+            "id": self._next_id()
+        }
+        
+        with httpx.Client() as client:
+            response = client.post(self.url, json=payload, headers=self.headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "error" in data:
+                raise RuntimeError(f"MCP Error: {data['error']}")
+                
+            tools = data.get("result", {}).get("tools", [])
+            return tools
+
     async def invoke_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """呼叫指定的工具"""
         payload = {

@@ -14,6 +14,7 @@ class ToolPermissions(BaseModel):
     allow_ltm: bool = True
     allow_stale_on_error: bool = False
     max_stale_age: int = 3600
+    requires_approval: bool = False
 
 class ToolConfigModel(BaseModel):
     ttl: Optional[int] = None

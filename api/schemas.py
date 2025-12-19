@@ -57,7 +57,7 @@ class Team(TeamBase):
     updated_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class TeamList(BaseModel):
     items: List[Team]
@@ -85,7 +85,7 @@ class DebateConfigResponse(DebateConfigCreate):
     created_at: datetime.datetime
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class DebateArchive(BaseModel):
     id: int
@@ -96,7 +96,7 @@ class DebateArchive(BaseModel):
     created_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # --- Tool Schemas ---
 
@@ -163,7 +163,7 @@ class Tool(ToolBase):
     updated_at: Optional[datetime.datetime] = None
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class ToolDescriptionGenerate(BaseModel):
     tool_type: str
@@ -210,7 +210,7 @@ class Company(CompanyBase):
     updated_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class SecurityBase(BaseModel):
     security_id: str
@@ -229,7 +229,7 @@ class Security(SecurityBase):
     updated_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class FinancialTermBase(BaseModel):
     term_id: str
@@ -250,7 +250,7 @@ class FinancialTerm(FinancialTermBase):
     updated_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # --- Prompt Schemas ---
 
@@ -271,4 +271,4 @@ class PromptTemplate(PromptTemplateBase):
     id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
