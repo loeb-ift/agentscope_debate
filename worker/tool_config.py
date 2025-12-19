@@ -33,7 +33,13 @@ def get_tools_description() -> str:
     生成工具列表的文字描述，供 prompt 使用。
     從 ToolRegistry 動態獲取，確保包含詳細的欄位說明。
     """
-    desc = "**可用工具列表**：\n"
+    desc = "**可用工具列表與使用規範**：\n"
+    desc += "> [!IMPORTANT]\n"
+    desc += "> **瀏覽工具治理規範**：\n"
+    desc += "> 1. **搜尋先行**：你只能申請瀏覽在 `searxng.search` 或其他搜尋工具結果中出現過的 URL。\n"
+    desc += "> 2. **一搜一付**：每次成功調用搜尋工具，系統將發放 **1 點瀏覽配額**。調用 `browser.browse` 會消耗 1 點配額。\n"
+    desc += "> 3. **策略選擇**：搜尋結果中可能有多個連結，但你只有一次機會。請在思考過程中挑選「最值得瀏覽」的網址進行申請。\n"
+    desc += "> 4. **主席核准**：所有瀏覽請求仍須經主席根據邊際效益進行最終審核。\n\n"
     
     # 按群組分類
     tools = tool_registry.list()
@@ -78,6 +84,10 @@ def get_tools_examples() -> str:
     examples += '3. 查詢股價: {"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01"}}\n'
     examples += '4. 查詢財報: {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
     
+    examples += '5. 查詢全球指數: {"tool": "av.GLOBAL_QUOTE", "params": {"symbol": "DAX"}}\n'
+    examples += '6. 查詢美國 CPI: {"tool": "av.CPI", "params": {"interval": "monthly"}}\n'
+    examples += '7. 獲取全球數據(Stooq): {"tool": "financial.pdr_reader", "params": {"symbols": ["^SPX"]}}\n'
+    
     return examples
 
 def get_recommended_tools_for_topic(topic: str) -> list:
@@ -86,8 +96,13 @@ def get_recommended_tools_for_topic(topic: str) -> list:
     """
     topic_lower = topic.lower()
     
-    # 推薦工具列表
-    tools = ["searxng.search", "internal.search_company", "internal.get_company_details"]
+    # 推薦工具列表 (全局可用核心工具)
+    tools = [
+        "searxng.search", 
+        "browser.browse", 
+        "internal.search_company", 
+        "internal.get_company_details"
+    ]
     
     # 台股相關
     if any(keyword in topic for keyword in ["台積電", "股價", "大盤", "台股", "2330", "上市", "上櫃"]):
@@ -97,5 +112,16 @@ def get_recommended_tools_for_topic(topic: str) -> list:
     if any(keyword in topic for keyword in ["營收", "獲利", "EPS", "財報", "月增", "年增"]):
         tools.extend(["tej.financial_summary", "tej.monthly_revenue", "tej.financial_summary_quarterly"])
     
+    # [Macro] 總經與全球市場相關
+    if any(keyword in topic_lower for keyword in ["通膨", "利率", "cpi", "fed", "ecb", "利率", "升息", "降息", "非農"]):
+        tools.extend([
+            "av.CPI", "av.FEDERAL_FUNDS_RATE", "av.TREASURY_YIELD", "av.INFLATION", 
+            "av.GLOBAL_QUOTE", "financial.pdr_reader"
+        ])
+
+    # [Global] 全球股市相關
+    if any(keyword in topic_lower for keyword in ["美股", "歐股", "日股", "道瓊", "標普", "納斯達克", "nasdaq", "dax"]):
+        tools.extend(["av.GLOBAL_QUOTE", "financial.pdr_reader", "financial.technical_analysis"])
+
     # 去重並返回
     return list(dict.fromkeys(tools))

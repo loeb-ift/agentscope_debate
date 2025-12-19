@@ -219,19 +219,30 @@ python3 -m pytest tests/unit/
 
 本平台採用 **數據與邏輯分離** 的架構，透過 **Operational Storage Unit (OSU)** 確保數據的公信力與處理效能。
 
-#### 1. 詳細工具清單
-| 模組 | 關鍵工具名稱 | 核心功能 |
-| :--- | :--- | :--- |
-| **自動化分析** | `chairman.eda_analysis` | 辯論開始時自動拉取數據並生成 EDA 報表 (整合技術指標) |
-| **技術分析** | `financial.technical_analysis` | 專為 Agent 設計，提供 RSI/MACD/SMA 等信號摘要 |
-| **數據拉取** | `financial.pdr_reader` | 透過 pandas-datareader (Stooq) 獲取高品質全球股價 (全局可用) |
-| **數據運算** | `ods.eda_describe` | 底層 OSU 數據處理，產生統計圖與缺失值分析 |
-| **事實查核** | `financial.get_verified_price` | 交叉比對 TEJ/TWSE/Yahoo 產出公信力股價 |
-| **金融分析** | `tej.financial_summary` | 獲取標準化財報、法人持股與會計科目 |
-| **智能檢索** | `search.router` | 根據角色自動路由至 Google CSE 或 SearXNG |
-| **集團實體** | `internal.get_industry_tree` | 查詢公司所屬產業鏈與集團關聯實體 |
+#### 1. 工具優先級體系 (Tool Prioritization Hierarchy)
+為了確保 Agent 引用數據的公信力並優化成本，系統執行嚴格的 **「內部優先、外部備援、測試最後」** 策略：
 
-#### 2. OSU 數據流轉邏輯
+| 級別 | 資料來源 | 信任等級 | 治理邏輯 |
+| :--- | :--- | :--- | :--- |
+| **L1: 核心內部** | `ChinaTimes` (時報資訊) | 🌟🌟🌟🌟🌟 (最高) | **內部特權工具**。擁有最高調用優先權，涵蓋即時報價、K線、與標準化財報。 |
+| **L2: 官方與分析** | `TWSE`, `Pandas-DataReader`, `EDA` | 🌟🌟🌟🌟 (高) | **專業驗證層**。用於交叉比對內部數據，或進行深度統計分析與全球宏觀研究。 |
+| **L3: 外部檢索** | `SearXNG`, `Browser` | 🌟🌟 (中) | **情報探索層**。受限工具，需主席准核且消耗瀏覽配額，用於獲取非結構化新聞事实。 |
+| **L4: 測試工具** | `TEJ` (測試版) | 🌟 (低) | **備援層**。僅在以上來源均無法滿足需求時，作為最後的數據參考點。 |
+
+#### 2. 詳細工具清單
+| 模組 | 關鍵工具名稱 | 核心功能 | 優先級 |
+| :--- | :--- | :--- | :--- |
+| **即時/事實** | `chinatimes.stock_rt` | **[Internal]** 高頻即時報價、成交明細與市場盤中動態 | **最高** |
+| **自動化分析** | `chairman.eda_analysis` | 辯論開始時自動拉取數據並生成 EDA 報表 (整合技術指標) | **核心** |
+| **數據拉取** | `financial.pdr_reader` | 透過 pandas-datareader (Stooq) 獲取高品質全球股價 (非台股必備) | **專業** |
+| **技術分析** | `financial.technical_analysis` | 專為 Agent 設計，提供 RSI/MACD/SMA 等 15+ 種信號摘要 | **專業** |
+| **數據運算** | `ods.eda_describe` | 底層 OSU 數據處理，產生統計圖與缺失值分析 | **基礎** |
+| **基礎財報** | `tej.financial_summary` | **[Beta]** 僅作備援參考之標準化財報、法人持股 | **最後** |
+| **智能檢索** | `search.smart` | 根據角色與題材自動路由至 Google CSE 或 SearXNG | **探索** |
+| **網頁瀏覽** | `browser.browse` | **(Gated)** 經主席准核後瀏覽指定網頁，並自動進行摘要優化 | **探索** |
+| **集團實體** | `internal.get_industry_tree` | 查詢公司所屬產業鏈與集團關聯實體 | **專業** |
+
+#### 3. OSU 數據流轉邏輯
 為了在有限的 Token 限制下處理大量金融數據，系統實作了 **「數據在 OSU 流轉，Agent 在 Context 引用」** 的機制：
 
 1.  **數據攝取 (Ingestion)**: 適配器將抓取的原始數據 (CSV) 存入 OSU 磁碟空間。
@@ -239,13 +250,20 @@ python3 -m pytest tests/unit/
 3.  **ODS 分析**: `ods.eda_describe` 讀取 OSU 檔案，產出視覺化圖表與摘要，並更新 Metadata。
 4.  **Agent 引用**: Agent 的上下文僅持有證據 ID 與摘要路徑，發言時透過 ID 進行精準引用（如 `[Ref: ev_eda_001]`）。
 
-#### 3. 證據生命週期管理 (Evidence Lifecycle)
+#### 4. 證據生命週期管理 (Evidence Lifecycle)
 系統透過 `worker/evidence_lifecycle.py` 實作了嚴格的證據狀態機，確保數據流轉的透明性：
 
 - **Ingest (寫入)**: 原始數據進入 OSU，建立 `DRAFT` 證據，並透過 `inputs_hash` (MD5) 自動去重。
 - **Verify (驗證)**: 執行 **數據誠信檢查 (Data Honesty)**。若數據為空或錯誤則隔離 (`QUARANTINE`)，通過則標記為 `VERIFIED` 並分配 **TTL (生存時間)**。
 - **Aging (老化)**: 定期將過期證據轉為 `STALE`，強制 Agent 重新獲取最新市場數據。
 - **Citation (引用)**: 透過 `create_checkpoint` 鎖定當前辯論的所有 `VERIFIED` ID，實現「事實錨定」。
+
+#### 5. 高成本工具治理 (Governance Gate)
+為了平衡資訊獲取與 API 成本，系統針對高成本工具（如 `browser.browse`）實作了 **「主席准核機制」**：
+
+1.  **申請與理由**: Agent 調用受限工具時，必須在參數中提供 `justification` (理由)。
+2.  **主席裁決**: `DebateCycle` 攔截請求並提交給主席 Agent，主席根據邊際效益與辯題關聯性決定 `approve` 或 `reject`。
+3.  **記憶優化 (Summarization)**: 瀏覽回傳的龐大內容會自動觸發 **LLM 摘要層**，僅保留精簡事實存入 Agent Context，防止長文本導致的記憶溢出與遺忘。
 
 ![工具架構圖](diagrams/exports/tool_architecture.svg)
 
@@ -282,6 +300,7 @@ curl http://localhost:8000/health
 - **前端使用指南**: [FRONTEND_USER_GUIDE.md](FRONTEND_USER_GUIDE.md)
 - **工具集架構**: [TOOLSET_ARCHITECTURE.md](TOOLSET_ARCHITECTURE.md)
 - **TEJ 驗證報告**: [TEJ_VERIFICATION_REPORT.md](TEJ_VERIFICATION_REPORT.md)
+- **瀏覽工具治理指南**: [BROWSER_TOOL_GOVERNANCE_GUIDE.md](BROWSER_TOOL_GOVERNANCE_GUIDE.md)
 
 ## 🐛 問題回報
 

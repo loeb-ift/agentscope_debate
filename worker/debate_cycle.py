@@ -45,6 +45,8 @@ class DebateCycle:
         self.archived_summaries = [] # List of structured summaries
         self.agent_tools_map = {} # 存儲每個 Agent 選擇的工具列表
         self.hippocampus = HippocampalMemory(debate_id) # Init Hippocampal Memory
+        self.discovered_urls = set() # [Governance] Track URLs found in search results
+        self.browse_quota = 0 # [Governance] "Search once, browse once" logic
         self.latest_db_date = None # [Phase 18] Date Awareness Handshake
         
         # [Optimization] Persistent LTM instances for buffering
@@ -1644,6 +1646,15 @@ class DebateCycle:
                             current_prompt = f"系統錯誤：{error_msg}\n請重新選擇有效的工具或發表言論。"
                             continue
 
+                        # --- [Governance Gate] Chairman Approval Check ---
+                        tool_meta = tool_registry.get_tool_data(tool_name)
+                        if tool_meta.get("requires_approval"):
+                            approval = await self._request_chairman_tool_approval(agent, tool_name, params)
+                            if not approval.get("approved"):
+                                self._publish_log("System", f"⛔ {agent.name} 的工具請求被主席駁回。建議：{approval.get('guidance')}")
+                                current_prompt = f"【主席指令】你的工具調用被駁回。\n理由：{approval.get('reason')}\n指導建議：{approval.get('guidance')}\n請調整策略，例如不依賴此工具繼續分析，或修正理由後重試。"
+                                continue # Skip execution and let agent reason
+                                
                         print(f"✓ Agent {agent.name} calling {tool_name}")
                         self._publish_log(f"{agent.name} (Tool)", f"Calling {tool_name} with {params}")
                         
@@ -1698,6 +1709,18 @@ class DebateCycle:
                                 # 3. Store in Working Memory
                                 await self.hippocampus.store(agent.name, tool_name, params, tool_result)
                                 self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬迴。")
+
+                                # [Governance] Track discovered URLs for search tools
+                                if "search" in tool_name or "fetch" in tool_name:
+                                    found_urls = self._extract_urls(str(tool_result))
+                                    if found_urls:
+                                        self.discovered_urls.update(found_urls)
+                                        self.browse_quota += 1 # [Governance] "Every search grants ONE browsing opportunity"
+                                        self._publish_log("System", f"🔍 發現 {len(found_urls)} 個新連結。已發放 1 點瀏覽配額 (目前配額: {self.browse_quota})。")
+                            
+                            # --- [Memory Management Opt] Summarization ---
+                            if tool_name.startswith("browser.") or (isinstance(tool_result, str) and len(tool_result) > 4000):
+                                tool_result = await self._summarize_content(str(tool_result), tool_name)
                             
                             # Publish Tool Result Preview to Log Stream
                             result_preview_log = str(tool_result)
@@ -2067,3 +2090,130 @@ class DebateCycle:
              # If even this fails, then fallback to report
              print(f"Error in forced conclusion: {e}")
              return f"(系統報告：Agent 在強制總結時發生錯誤，證據如下)\n{evidence_text}"
+
+    async def _summarize_content(self, content: str, tool_name: str) -> str:
+        """
+        [Memory Management Optimization]
+        Summarize large content to save tokens and prevent context window overflow.
+        """
+        if not content:
+            return content
+            
+        # Threshold: 2000 chars
+        if len(content) < 2000:
+            return content
+            
+        print(f"🧠 [Memory Opt] Summarizing large content from {tool_name} ({len(content)} chars)...")
+        self._publish_log("System", f"🧠 正在為工具 {tool_name} 的龐大結果進行優化與摘要...")
+        
+        summary_prompt = f"""
+你是一個精簡的資料分析助手。請將以下從工具 `{tool_name}` 獲取的原始資料，在保留所有核心事實、數據、日期與實體（公司名/代號）的前提下，進行極限壓縮。
+
+**原始資料 (部分顯示)**:
+{content[:8000]}
+
+**要求**:
+1. 僅保留對辯論「{self.topic}」有邊際價值的資訊。
+2. 輸出格式必須為條列式，且總長度不超過 800 字。
+3. 若包含股價或財務數據，請保留最新的數值。
+
+摘要內容：
+"""
+        try:
+            summary = await call_llm_async(summary_prompt, system_prompt="你是高效能資料過濾器。")
+            return f"{summary}\n\n[註：原始資料已截斷並由系統摘要，原始長度：{len(content)} 字元]"
+        except Exception as e:
+            print(f"Warning: Summarization failed: {e}")
+            return content[:3000] + "... [摘要失敗，系統自動截斷]"
+
+    async def _request_chairman_tool_approval(self, agent: AgentBase, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        [Governance Gate]
+        Request explicit approval from Chairman for high-cost tools.
+        """
+        justification = params.get("justification", "Agent 未提供明確理由")
+        url_hint = params.get("url", "")
+        
+        # --- [Governance Gate] Pre-check for Browse tools ---
+        if tool_name.startswith("browser."):
+            # 1. Check Quota
+            if self.browse_quota <= 0:
+                self._publish_log("Governance", f"🛑 自動駁回：目前無瀏覽配額。請先調用搜尋工具以獲取配額。")
+                return {"approved": False, "reason": "無瀏覽配額", "guidance": "每次搜尋僅獲得一次精準瀏覽機會。請先進行搜尋。"}
+            
+            # 2. Check URL Discovery (Strict Allowlist)
+            if url_hint and url_hint not in self.discovered_urls:
+                self._publish_log("Governance", f"🛑 自動駁回：網址未被驗證。Agent 只能訪問搜尋結果中存在的 URL。")
+                return {"approved": False, "reason": "網址未經搜尋發現", "guidance": "安全限制：你只能調用經由搜尋引擎發現的合法 URL。"}
+
+        self._publish_log("Governance", f"🛡️ 攔截到受限工具調用：{tool_name}。正在請求主席核准...")
+        self._publish_log("Agent", f"🙋 {agent.name} 申請使用 {tool_name}：『{justification}』" + (f" (目標: {url_hint})" if url_hint else ""))
+        
+        db = SessionLocal()
+        try:
+            template = """
+你是辯論主席。目前辯手 {agent_name} 申請使用高成本工具 `{tool_name}`。
+
+**辯題**: {topic}
+**申請理由**: {justification}
+**目標/參數**: {params}
+
+**主席職責**:
+1. 確保閱讀該網頁是有效益且具關聯性的。
+2. 遵守「每次搜尋僅獲得一次瀏覽配額」的限制。
+3. 評估該網址是否值得消耗目前寶貴的瀏覽配額（剩餘配額：{quota}）。
+4. 若理由不足以說服你，請予駁回並給予指導。
+
+請以 JSON 格式回應：
+{{
+  "approved": true/false,
+  "reason": "核准或駁回的具體理由",
+  "guidance": "給辯手的進一步指導建議"
+}}
+"""
+            review_prompt = template.format(
+                agent_name=agent.name,
+                tool_name=tool_name,
+                topic=self.topic,
+                justification=justification,
+                params=json.dumps(params, ensure_ascii=False),
+                quota=self.browse_quota
+            )
+        finally:
+            db.close()
+            
+        try:
+            response = await call_llm_async(review_prompt, system_prompt="你是嚴格且公正的辯論主席，負責資源分配與品質控管。", context_tag=f"{self.debate_id}:Chairman")
+            decision = json.loads(re.search(r'\{.*\}', response, re.DOTALL).group(0))
+            
+            if decision.get("approved"):
+                self._publish_log("Chairman", f"✅ 核准調用 {tool_name}：{decision.get('reason')}")
+                if tool_name.startswith("browser."):
+                    self.browse_quota -= 1 # [Governance] Consume Quota
+                    self._publish_log("System", f"📉 瀏覽配額已消耗。剩餘配額：{self.browse_quota}")
+            else:
+                self._publish_log("Chairman", f"🛑 駁回調用 {tool_name}：{decision.get('reason')}")
+                
+            return decision
+        except Exception as e:
+            print(f"Error in Chairman tool approval: {e}")
+            return {"approved": False, "reason": "系統審核發生異常", "guidance": "請改用其他替代方案。"}
+    def _extract_urls(self, text: str) -> List[str]:
+        """
+        [Governance] Extract URLs from search results to build the allowlist.
+        """
+        if not text or not isinstance(text, str):
+            return []
+        
+        # Simple URL regex
+        url_pattern = r'https?://[^\s<>"\'\(\)\[\]]+'
+        urls = re.findall(url_pattern, text)
+        
+        # Clean up trailing punctuation often caught by regex
+        cleaned_urls = []
+        for url in urls:
+            while url and url[-1] in '.,;:!?':
+                url = url[:-1]
+            if url:
+                cleaned_urls.append(url)
+        return list(set(cleaned_urls))

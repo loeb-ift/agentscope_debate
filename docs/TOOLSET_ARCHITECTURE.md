@@ -95,39 +95,39 @@ CREATE TABLE agent_toolsets (
 }
 ```
 
-### 2. 專用工具集（Specialized ToolSet）
+### 2. 專用工具集 (Specialized ToolSet)
 - **手動分配**給特定 Agent
-- 針對特定任務設計
+- 針對特定任務設計，並遵循 **L1-L4 優先級體系**。
 
-**範例 1：台股分析工具集**
-```python
-{
-    "name": "台股分析工具集",
-    "description": "專門用於台灣股市分析",
-    "tool_names": [
-        "tej.stock_price",
-        "tej.company_info",
-        "tej.monthly_revenue",
-        "tej.institutional_holdings",
-        "tej.margin_trading",
-        "tej.financial_summary"
-    ],
-    "is_global": False
-}
-```
+#### 工具優先級體系 (Priority Hierarchy)
 
-**範例 2：網頁搜尋工具集**
-```python
-{
-    "name": "網頁搜尋工具集",
-    "description": "用於網頁搜尋和資訊收集",
-    "tool_names": [
-        "searxng.search",
-        "duckduckgo.search"
-    ],
-    "is_global": False
-}
-```
+| 級別 | 信任等級 | 代表工具 | 治理邏輯 |
+| :--- | :--- | :--- | :--- |
+| **L1: 核心內部** | 🌟🌟🌟🌟🌟 | `chinatimes.*` | 核心報價與財報，免准核且優先調用。 |
+| **L2: 官方分析** | 🌟🌟🌟🌟 | `financial.pdr_reader`, `twse.*` | 全球數據與專業驗證。 |
+| **L3: 受限探索** | 🌟🌟 | `browser.*`, `search.*` | 高成本工具，需主席准核。 |
+| **L4: 測試備援** | 🌟 | `tej.*` | 僅作最後備援。 |
+
+---
+
+## 現有專用工具集實作 (Real-world Implementation)
+
+以下為目前系統中實際部署的專用工具集範例：
+
+**範例 1：戰略工具集 (Strategic ToolSet)**
+- **用途**: 供主席與宏觀分析師進行深度決策。
+- **工具清單**:
+    - [L1] `chinatimes.market_index`, `chinatimes.balance_sheet`, `chinatimes.stock_news`
+    - [L2] `chairman.eda_analysis`, `ods.eda_describe`, `financial.pdr_reader`
+    - [L3] `search.smart`, `browser.browse`
+    - [L4] `tej.company_info`
+
+**範例 2：量化分析工具集 (Quantitative ToolSet)**
+- **用途**: 側重技術指標與高頻報價驗證。
+- **工具清單**:
+    - [L1] `chinatimes.stock_rt`, `chinatimes.stock_kline`
+    - [L2] `financial.technical_analysis`, `financial.get_verified_price`
+    - [L4] `tej.stock_price`
 
 ---
 

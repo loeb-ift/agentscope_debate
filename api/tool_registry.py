@@ -588,6 +588,15 @@ except ImportError:
 except Exception as e:
     print(f"⚠️ Alpha Vantage MCP Registration Failed: {e}")
 
+# Browser MCP Registration
+try:
+    from adapters.browser_mcp_adapter import BrowserMCPAdapter
+    browser_adapter = BrowserMCPAdapter()
+    tool_registry.register_mcp_adapter(browser_adapter, prefix="browser", requires_approval=True)
+    print("✅ Browser MCP Tools Registered (Gated).")
+except Exception as e:
+    print(f"⚠️ Browser MCP Registration Failed: {e}")
+
 # Register EDA Tools
 from adapters.ods_internal_adapter import ODSInternalAdapter
 from adapters.eda_tool_adapter import EDAToolAdapter
