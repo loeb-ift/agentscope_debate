@@ -102,32 +102,19 @@ class EDAToolAdapter(ToolAdapter):
         """
         執行 EDA 分析（同步包裝）。
         
-        Args:
-            symbol: 股票代碼
-            debate_id: 辯論 ID
-            lookback_days: 回溯天數
-            
-        Returns:
-            Dictionary with:
-                - success: bool
-                - summary: 分析摘要文本
-                - evidence_ids: Evidence 文件 ID 列表
-                - artifacts: 產出檔案路徑
-                - error: 錯誤訊息（若失敗）
-        """
-    def invoke(self, **kwargs: Any) -> Dict[str, Any]:
-        """
-        執行 EDA 分析（同步包裝）。
+        此方法處理複雜的異步/同步橋接，確保在 Celery 執行緒或普通環境下都能穩定運行。
         """
         try:
-            # 檢查是否有正在運行的 event loop
-            asyncio.get_running_loop()
-            # 如果有，則在另一個執行緒中運行，避免 "loop already running" 錯誤
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(lambda: asyncio.run(self._invoke_async(**kwargs))).result()
-        except RuntimeError:
-            # 沒有正在運行的 loop，直接使用 asyncio.run
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                # 如果當前執行緒已有運行的 loop，則在執行緒池中運行並等待結果
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(lambda: asyncio.run(self._invoke_async(**kwargs))).result()
+            else:
+                 return asyncio.run(self._invoke_async(**kwargs))
+        except (RuntimeError, NameError):
+            # 沒有正在運行的 loop (RuntimeError) 或 asyncio 未導入 (NameError)
             return asyncio.run(self._invoke_async(**kwargs))
     
     async def _invoke_async(self, **kwargs: Any) -> Dict[str, Any]:
@@ -676,19 +663,38 @@ class EDAToolAdapter(ToolAdapter):
                 print(f"[EDA Tool] Missing price columns for technical indicators calculation")
                 return csv_path
             
+            # 檢查樣本量是否足夠（指標如 MACD 需要一定長度的歷史數據）
+            if len(df) < 35:
+                print(f"[EDA Tool] Data too short ({len(df)} rows) for reliable technical indicators, skipping complex ones")
+                # 至少嘗試簡單均線
+                if len(df) >= 20: 
+                    try: df.ta.sma(length=20, append=True)
+                    except: pass
+                df.to_csv(csv_path, index=False)
+                return csv_path
+
             # 使用 pandas_ta 擴展
-            # 簡單移動平均線
-            df.ta.sma(length=20, append=True)
-            df.ta.sma(length=50, append=True)
-            
-            # 相對強弱指標
-            df.ta.rsi(length=14, append=True)
-            
-            # MACD
-            df.ta.macd(append=True)
-            
-            # 布林通道
-            df.ta.bbands(append=True)
+            try:
+                # 簡單移動平均線
+                df.ta.sma(length=20, append=True)
+                df.ta.sma(length=50, append=True)
+                
+                # 相對強弱指標
+                df.ta.rsi(length=14, append=True)
+                
+                # MACD (12, 26, 9) - 這是最容易報錯的地方，單獨攔截
+                try:
+                    df.ta.macd(append=True)
+                except Exception as mae:
+                    print(f"[EDA Tool] MACD calculation failed (likely too many NaNs): {mae}")
+                
+                # 布林通道 (20, 2)
+                try:
+                    df.ta.bbands(append=True)
+                except Exception as bbe:
+                    print(f"[EDA Tool] Bollinger Bands calculation failed: {bbe}")
+            except Exception as outer_e:
+                print(f"[EDA Tool] Basic Technical indicators error: {outer_e}")
             
             # 儲存回 CSV
             df.to_csv(csv_path, index=False)

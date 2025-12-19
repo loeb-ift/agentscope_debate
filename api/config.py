@@ -50,6 +50,7 @@ class Config:
 
     # Feature Flags
     ENABLE_CHINATIMES_TOOLS = os.getenv("ENABLE_CHINATIMES_TOOLS", "false").lower() == "true"
+    ENABLE_TEJ_TOOLS = os.getenv("ENABLE_TEJ_TOOLS", "false").lower() == "true"
 
 
     # Metadata for UI

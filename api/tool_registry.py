@@ -46,6 +46,23 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, Any] = {}
         self._redis_client = get_redis_client()
+        from api.config import Config
+        self._config = Config
+
+    def _is_tool_enabled(self, name: str, group: str) -> bool:
+        """檢查特定工具是否啟用（基於名稱或群組）。"""
+        # [Governance] Global Kill-Switch for TEJ tools
+        # Check by name prefix or explicit group name
+        if not self._config.ENABLE_TEJ_TOOLS:
+            if group == "tej" or (name and name.startswith("tej.")):
+                return False
+        
+        # [Governance] Global Kill-Switch for ChinaTimes tools
+        if not self._config.ENABLE_CHINATIMES_TOOLS:
+            if group == "chinatimes" or (name and name.startswith("chinatimes.")) or (name and name.startswith("news.search_chinatimes")):
+                return False
+                
+        return True
 
     def _get_cache_key(self, tool_id: str, params: Dict[str, Any], exclude_params: list = None) -> str:
         """
@@ -91,6 +108,10 @@ class ToolRegistry:
              
             pass # See register_lazy below
         
+        if not self._is_tool_enabled(getattr(tool, 'name', None), group):
+            print(f"⚠️ Skipping registration for tool: {getattr(tool, 'name', 'unknown')} (disabled by name/group policy)")
+            return
+
         # Eager Registration (Original logic)
         if not all(hasattr(tool, attr) for attr in ['name', 'describe', 'invoke']):
             raise ValueError("Tool must have name, describe, and invoke attributes")
@@ -102,6 +123,10 @@ class ToolRegistry:
         """
         Lazy 註冊工具。Factory 函數在第一次使用時被調用。
         """
+        if not self._is_tool_enabled(name, group):
+            print(f"⚠️ Skipping lazy registration for tool: {name} (disabled by name/group policy)")
+            return
+            
         tool_id = f"{name}:{version}"
         self._tools[tool_id] = {
             "lazy": True,
@@ -160,6 +185,12 @@ class ToolRegistry:
         for tool_meta in tools:
             # MCP Tool Structure: {name, description, inputSchema}
             t_name = tool_meta.get("name")
+            full_name = f"{prefix}.{t_name}" if prefix else t_name
+            
+            if not self._is_tool_enabled(full_name, prefix):
+                print(f"⚠️ Skipping MCP tool registration: {full_name} (disabled by policy)")
+                continue
+
             t_desc = tool_meta.get("description", "No description")
             t_schema = tool_meta.get("inputSchema", {})
             

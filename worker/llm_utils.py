@@ -21,6 +21,32 @@ class LLMProvider:
     def __init__(self):
         pass
 
+    def _sanitize_tools(self, tools: List[Dict]) -> List[Dict]:
+        """[Governance] Ensure tool descriptions are strings to satisfy LLM API requirements."""
+        if not tools:
+            return tools
+        
+        sanitized = []
+        for t in tools:
+            if t.get("type") == "function":
+                func = t.get("function", {})
+                desc = func.get("description", "")
+                # If description is a dict (metadata), try to extract the 'description' key
+                if isinstance(desc, dict):
+                    desc = desc.get("description", str(desc))
+                
+                sanitized.append({
+                    "type": "function",
+                    "function": {
+                        "name": func.get("name"),
+                        "description": str(desc),
+                        "parameters": func.get("parameters", {})
+                    }
+                })
+            else:
+                sanitized.append(t)
+        return sanitized
+
     async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
         raise NotImplementedError
 
@@ -50,7 +76,7 @@ class OllamaProvider(LLMProvider):
             "stream": False
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = self._sanitize_tools(tools)
         return payload
 
     async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None, model: str = None) -> str:
@@ -106,7 +132,7 @@ class AzureOpenAIProvider(LLMProvider):
             "stream": False
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = self._sanitize_tools(tools)
             payload["tool_choice"] = "auto"
         return payload
 
@@ -175,7 +201,7 @@ class OpenAIProvider(LLMProvider):
             "stream": False
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = self._sanitize_tools(tools)
             payload["tool_choice"] = "auto"
         return payload
 

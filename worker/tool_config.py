@@ -81,8 +81,10 @@ def get_tools_examples() -> str:
     examples = "**核心工具調用範例**：\n"
     examples += '1. 查找公司代號: {"tool": "internal.search_company", "params": {"keyword": "台積電"}}\n'
     examples += '2. 搜尋新聞: {"tool": "searxng.search", "params": {"q": "台積電 2024 Q4 營收"}}\n'
-    examples += '3. 查詢股價: {"tool": "tej.stock_price", "params": {"coid": "2330", "start_date": "2024-01-01"}}\n'
-    examples += '4. 查詢財報: {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
+    examples += '3. 查詢最新股價: {"tool": "chinatimes.stock_rt", "params": {"symbol": "2330"}}\n'
+    examples += '4. 查詢歷史報表: {"tool": "chinatimes.stock_kline", "params": {"symbol": "2330", "period": "day"}}\n'
+    examples += '5. 獲取公信力股價: {"tool": "financial.get_verified_price", "params": {"symbol": "2330"}}\n'
+    examples += '6. 查詢標準化財報 (Backup): {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
     
     examples += '5. 查詢全球指數: {"tool": "av.GLOBAL_QUOTE", "params": {"symbol": "DAX"}}\n'
     examples += '6. 查詢美國 CPI: {"tool": "av.CPI", "params": {"interval": "monthly"}}\n'
@@ -106,11 +108,17 @@ def get_recommended_tools_for_topic(topic: str) -> list:
     
     # 台股相關
     if any(keyword in topic for keyword in ["台積電", "股價", "大盤", "台股", "2330", "上市", "上櫃"]):
-        tools.extend(["tej.stock_price", "tej.company_info", "tej.monthly_revenue", "tej.institutional_holdings"])
+        tools.extend([
+            "chinatimes.stock_rt", "chinatimes.stock_kline", "financial.get_verified_price", "twse.stock_day",
+            "tej.stock_price", "tej.company_info"
+        ])
     
     # 財務相關
     if any(keyword in topic for keyword in ["營收", "獲利", "EPS", "財報", "月增", "年增"]):
-        tools.extend(["tej.financial_summary", "tej.monthly_revenue", "tej.financial_summary_quarterly"])
+        tools.extend([
+            "chinatimes.balance_sheet", "chinatimes.income_statement", "chinatimes.cash_flow", 
+            "chinatimes.financial_ratios", "tej.financial_summary"
+        ])
     
     # [Macro] 總經與全球市場相關
     if any(keyword in topic_lower for keyword in ["通膨", "利率", "cpi", "fed", "ecb", "利率", "升息", "降息", "非農"]):

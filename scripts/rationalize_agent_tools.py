@@ -16,30 +16,32 @@ def update_toolsets_and_links():
                     "financial.get_verified_price", "twse.stock_day", "financial.pdr_reader", 
                     "ods.eda_describe", "av.GLOBAL_QUOTE", "av.TIME_SERIES_DAILY", 
                     "yfinance.stock_price", "search.smart", "searxng.search",
-                    "tej.stock_price", "tej.futures_data", "tej.options_daily_trading"
+                    "tej.stock_price", "tej.futures_data"
                 ]
             },
             "Valuation ToolSet": {
                 "desc": "估值建模工具集：優先使用內部基本面數據 (ChinaTimes) 與官方工具，TEJ 僅作備援。",
                 "tools": [
                     "chinatimes.stock_fundamental", "chinatimes.balance_sheet", "chinatimes.income_statement", 
-                    "chinatimes.cash_flow", "ods.eda_describe", "search.smart", "searxng.search",
-                    "tej.financial_summary", "tej.financial_summary_quarterly", "tej.shareholder_meeting"
+                    "chinatimes.cash_flow", "ods.eda_describe", "financial.get_verified_price", 
+                    "search.smart", "searxng.search",
+                    "tej.financial_summary", "tej.financial_summary_quarterly"
                 ]
             },
             "Industry ToolSet": {
                 "desc": "產業研究工具集：優先內部產業分析 (ChinaTimes) 與結構工具，TEJ 僅作備援。",
                 "tools": [
-                    "chinatimes.sector_info", "chinatimes.stock_fundamental", 
+                    "chinatimes.sector_info", "chinatimes.stock_fundamental", "chinatimes.stock_rt",
                     "internal.get_industry_tree", "internal.get_company_details", "internal.search_company",
                     "browser.browse", "search.smart", "searxng.search", "ods.eda_describe",
                     "tej.company_info", "tej.monthly_revenue"
                 ]
             },
             "Risk ToolSet": {
-                "desc": "風控籌碼工具集：優先使用內部即時新聞與事實 (ChinaTimes)，TEJ 僅作備援。",
+                "desc": "風控籌碼工具集：優先使用內部即時新聞、事實 (ChinaTimes) 與即時報價，TEJ 僅作備援。",
                 "tools": [
-                    "chinatimes.stock_news", "news.search_chinatimes", "chinatimes.financial_ratios", 
+                    "chinatimes.stock_news", "chinatimes.stock_rt", "financial.get_verified_price",
+                    "news.search_chinatimes", "chinatimes.financial_ratios", 
                     "chinatimes.stock_fundamental", "browser.browse", "search.smart", "searxng.search",
                     "ods.eda_describe", "tej.institutional_holdings", "tej.margin_trading"
                 ]
@@ -49,11 +51,11 @@ def update_toolsets_and_links():
                 "tools": [
                     "chinatimes.market_index", "chinatimes.balance_sheet", "chinatimes.income_statement", 
                     "chinatimes.cash_flow", "chinatimes.financial_ratios", "chinatimes.stock_news",
-                    "news.search_chinatimes", "chairman.eda_analysis", "ods.eda_describe", 
+                    "news.search_chinatimes", "chinatimes.stock_rt", "chairman.eda_analysis", "ods.eda_describe", 
                     "financial.technical_analysis", "financial.get_verified_price", "financial.pdr_reader", 
                     "av.CPI", "av.FEDERAL_FUNDS_RATE", "av.TREASURY_YIELD", "av.INFLATION", 
                     "browser.browse", "search.smart", "searxng.search", 
-                    "internal.get_industry_tree", "internal.get_key_personnel", "internal.get_corporate_relationships",
+                    "internal.get_industry_tree", "internal.get_key_personnel",
                     "tej.company_info", "tej.financial_summary"
                 ]
             },
@@ -61,7 +63,8 @@ def update_toolsets_and_links():
                 "desc": "成長動能工具集：優先內部排行 (ChinaTimes) 與趨勢分析，TEJ 僅作備援。",
                 "tools": [
                     "chinatimes.market_rankings", "chinatimes.sector_info", "chinatimes.stock_rt",
-                    "financial.technical_analysis", "av.GLOBAL_QUOTE", "av.TOP_GAINERS_LOSERS", 
+                    "financial.technical_analysis", "financial.get_verified_price",
+                    "av.GLOBAL_QUOTE", "av.TOP_GAINERS_LOSERS", 
                     "search.smart", "searxng.search", "ods.eda_describe"
                 ]
             }

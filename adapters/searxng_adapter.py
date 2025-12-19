@@ -6,6 +6,10 @@ import hashlib
 import os
 import time
 import random
+from api.redis_client import get_redis_client
+
+# 定義可供輪轉的引擎池
+ENGINES_POOL = ["google", "bing", "duckduckgo", "brave", "qwant"]
 
 # Lazy import to avoid circular dependency if possible, or just import
 # from adapters.google_cse_adapter import GoogleCSEAdapter
@@ -82,7 +86,19 @@ class SearXNGAdapter(ToolAdapter):
         engines = kwargs.get("engines")
 
         params = {"q": q, "categories": category, "format": "json"}
-        if engines:
+        
+        # 實施引擎輪流詢問 (Round-robin)
+        if not engines:
+            try:
+                redis = get_redis_client()
+                # 取得並增加全局索引
+                engine_idx = redis.incr("searxng:engine_rotation_index")
+                selected_engine = ENGINES_POOL[engine_idx % len(ENGINES_POOL)]
+                params["engines"] = selected_engine
+                print(f"[SearXNG Rotation] Round-robin selected engine: {selected_engine} (Index: {engine_idx})")
+            except Exception as re:
+                print(f"⚠️ Redis rotation failed, using SearXNG default: {re}")
+        else:
             params["engines"] = engines
 
         max_retries = 2

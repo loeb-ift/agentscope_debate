@@ -662,11 +662,16 @@ class DebateCycle:
         for name in report_tools:
             try:
                 t_data = tool_registry.get_tool_data(name)
+                # Fix: description might be a dict (metadata) or a string
+                desc = t_data.get('description', '')
+                if isinstance(desc, dict):
+                    desc = desc.get('description', '')
+
                 ollama_tools.append({
                     "type": "function",
                     "function": {
                         "name": name,
-                        "description": t_data.get('description', ''),
+                        "description": desc,
                         "parameters": t_data.get('schema', {})
                     }
                 })
@@ -766,11 +771,16 @@ class DebateCycle:
         for t_name in tools:
             try:
                 t_data = tool_registry.get_tool_data(t_name)
+                # Fix: description might be a dict (metadata) or a string
+                desc = t_data.get('description', '')
+                if isinstance(desc, dict):
+                    desc = desc.get('description', '')
+
                 ollama_tools.append({
                     "type": "function",
                     "function": {
                         "name": t_name,
-                        "description": t_data.get('description', ''),
+                        "description": desc,
                         "parameters": t_data.get('schema', {})
                     }
                 })
@@ -1411,13 +1421,24 @@ class DebateCycle:
             if not fallback_hint:
                 fallback_hint = "\n💡 Hint: Use 'searxng.search' if structured data is missing."
             
+            # [Governance] Browser Info
+            browser_info = f"\n### 🌐 瀏覽治理狀態 (Browser Governance Status)\n- **剩餘瀏覽配額**: {self.browse_quota} 點 (每次搜尋成功獎勵 1 點)\n"
+            if self.discovered_urls:
+                # Show top 5 discovered URLs if many
+                show_urls = list(self.discovered_urls)[:5]
+                browser_info += "- **已發現可用網址 (Discovered URLs)**:\n  " + "\n  ".join(show_urls)
+                if len(self.discovered_urls) > 5:
+                    browser_info += f"\n  ... (共 {len(self.discovered_urls)} 個網址)"
+            else:
+                browser_info += "- **目前尚未發現可用網址，請先使用搜尋工具取得數據後再申請瀏覽。**"
+
             user_prompt = user_template.format(
                 round_num=round_num,
                 history_text=history_text,
                 chairman_summary=self.analysis_result.get('step5_summary', '無'),
                 current_date=f"{CURRENT_DATE} {db_date_info}",
                 stock_codes=chr(10).join([f"- {name}: {code}" for name, code in STOCK_CODES.items()]),
-                tools_desc=tools_desc,
+                tools_desc=tools_desc + browser_info,
                 tools_examples=tools_examples,
                 fallback_hint=fallback_hint
             )
@@ -1589,7 +1610,7 @@ class DebateCycle:
                             # If reason contains "lack", "missing", "data", "price", "stock" -> try to equip fallback tools
                             triggers = ["缺", "miss", "data", "數據", "資料", "price", "stock", "股價", "2480"]
                             if any(t in reason.lower() for t in triggers):
-                                fallback_tools = ["financial.get_verified_price", "tej.stock_price", "yahoo.stock_price"]
+                                fallback_tools = ["chinatimes.stock_rt", "financial.get_verified_price", "twse.stock_day"]
                                 added_tools = []
                                 current_tools = self.agent_tools_map.get(agent.name, [])
                                 
@@ -1712,7 +1733,7 @@ class DebateCycle:
 
                                 # [Governance] Track discovered URLs for search tools
                                 if "search" in tool_name or "fetch" in tool_name:
-                                    found_urls = self._extract_urls(str(tool_result))
+                                    found_urls = self._extract_urls(tool_result)
                                     if found_urls:
                                         self.discovered_urls.update(found_urls)
                                         self.browse_quota += 1 # [Governance] "Every search grants ONE browsing opportunity"
@@ -2198,22 +2219,32 @@ class DebateCycle:
         except Exception as e:
             print(f"Error in Chairman tool approval: {e}")
             return {"approved": False, "reason": "系統審核發生異常", "guidance": "請改用其他替代方案。"}
-    def _extract_urls(self, text: str) -> List[str]:
+    def _extract_urls(self, data: Any) -> List[str]:
         """
         [Governance] Extract URLs from search results to build the allowlist.
+        Recursively walks through dicts and lists to find URLs.
         """
-        if not text or not isinstance(text, str):
-            return []
-        
-        # Simple URL regex
-        url_pattern = r'https?://[^\s<>"\'\(\)\[\]]+'
-        urls = re.findall(url_pattern, text)
-        
-        # Clean up trailing punctuation often caught by regex
-        cleaned_urls = []
-        for url in urls:
-            while url and url[-1] in '.,;:!?':
-                url = url[:-1]
-            if url:
-                cleaned_urls.append(url)
-        return list(set(cleaned_urls))
+        urls = set()
+        # Pattern to capture clean URLs
+        url_pattern = re.compile(r'https?://[^\s<>"\'\(\)\[\]]+')
+
+        def walk(node: Any):
+            if isinstance(node, str):
+                for match in url_pattern.findall(node):
+                    # Basic cleaning: remove trailing punctuation that might be picked up
+                    clean_url = match.rstrip('.,;:!?')
+                    urls.add(clean_url)
+            elif isinstance(node, dict):
+                for key, val in node.items():
+                    # Optimization: 'url' keys are highly likely to be valid targets
+                    if key == "url" and isinstance(val, str) and val.startswith("http"):
+                        urls.add(val.rstrip('.,;:!?'))
+                    else:
+                        walk(val)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        if data:
+            walk(data)
+        return list(urls)
