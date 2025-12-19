@@ -273,10 +273,7 @@ class TEJBaseAdapter(ToolAdapter):
 class TEJCompanyInfo(TEJBaseAdapter):
     name = "tej.company_info"
     version = "v1"
-    description = """查詢上市櫃公司基本資料 (TRAIL/AIND)
-    主要欄位: 公司代碼(coid)、公司簡稱(cname)、產業別(ind_code)、成立日期(found_date)、
-    上市日期(list_date)、董事長(chairman)、總經理(general_manager)、實收資本額(capital)、
-    員工人數(emp_num)、營業項目(business_scope)等"""
+    description = """[Tier 1 Backup] 查詢上市櫃公司基本資料 (TRAIL/AIND)。官方數據階層，提供最完整的權威財務背景資訊。"""
 
     @property
     def schema(self) -> Dict[str, Any]:
@@ -299,10 +296,7 @@ class TEJCompanyInfo(TEJBaseAdapter):
 class TEJStockPrice(TEJBaseAdapter):
     name = "tej.stock_price"
     version = "v1"
-    description = """查詢上市櫃未調整股價日資料 (TRAIL/TAPRCD)
-    主要欄位: 年月日(mdate)、開盤價(open_d)、最高價(high_d)、最低價(low_d)、收盤價(close_d)、
-    成交量(volume)、成交值(amount)、報酬率(roi)、週轉率(turnover)、本益比(per_tse/per_tej)、
-    股價淨值比(pbr_tse/pbr_tej)、市值(mv)、漲跌停標記(limit)等"""
+    description = """[Tier 1 Backup] 查詢上市櫃未調整股價日資料 (TRAIL/TAPRCD)。官方數據階層，可用於精確的價格驗證與量化分析。"""
 
     @property
     def schema(self) -> Dict[str, Any]:

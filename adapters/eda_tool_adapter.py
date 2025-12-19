@@ -42,10 +42,13 @@ class EDAToolAdapter(ToolAdapter):
         
         功能：
         1. 自動拉取股票歷史數據（Yahoo Finance）
-        2. 生成完整 EDA 報表（ydata-profiling）
-        3. 產生統計圖表（直方圖、相關矩陣、箱型圖）
-        4. 品質檢查與驗證
-        5. 自動攝取到 Evidence 系統
+        2. 生成完整 EDA 報表與相關係數矩陣（支持多元迴歸分析思路）
+        3. 品質檢查與驗證
+        4. 自動攝取到 Evidence 系統
+        
+        量化框架應用 (Multiple Regression / DiD)：
+        - 利用回傳的相關係數矩陣 (Correlation Matrix) 與技術指標，分析變項間的交互作用。
+        - 例如：分析「成交量」與「RSI」對「未來三日收盤價」的影響大小，以建立更嚴密的因果推論。
         
         適用場景：
         - 主席在總結時需要實證數據支持

@@ -6,7 +6,7 @@ from .base import BaseToolAdapter, ToolResult, UpstreamError
 class TWSEStockDay(BaseToolAdapter):
     name = "twse.stock_day"
     version = "v1"
-    description = """查詢台灣證交所 (TWSE) 個股日成交資訊 (STOCK_DAY)。
+    description = """[Tier 1] 查詢台灣證交所 (TWSE) 個股日成交資訊 (STOCK_DAY)。交易所官方原始數據，具有最高法律效力。
     資料包含：日期、成交股數、成交金額、開盤價、最高價、最低價、收盤價、漲跌價差、成交筆數。
     注意：TWSE API 採用月為單位查詢。"""
 

@@ -31,7 +31,7 @@ class SearXNGAdapter(ToolAdapter):
 
     @property
     def description(self) -> str:
-        return "使用 SearXNG 進行隱私保護的綜合搜尋（支援多搜尋引擎聚合）。適用於一般網路資料查找。"
+        return "[Tier 3] 使用 SearXNG 進行隱私保護的綜合搜尋（支援多搜尋引擎聚合）。數據來自多方媒體與網站，調用時必須在報告中列出具體媒體名稱與原始連結。"
 
     @property
     def cache_ttl(self) -> int:

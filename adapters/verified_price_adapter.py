@@ -11,7 +11,7 @@ class VerifiedPriceAdapter(ToolAdapter):
     """
     name = "financial.get_verified_price"
     version = "v1"
-    description = """獲取經多源驗證的股價（TEJ/TWSE/Yahoo）。
+    description = """[Tier 1] 獲取經多源驗證的股價（TEJ/TWSE/Yahoo）。官方/正式數據階層。
     自動處理非交易日（回退至最近交易日），並提供價格可信度證明。
     若 TEJ 資料缺失，會自動嘗試官方 (TWSE) 與外部 (Yahoo) 數據。
     輸入可以是代碼 (2480) 或 (2480.TW)。"""

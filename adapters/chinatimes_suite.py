@@ -44,7 +44,7 @@ class ChinaTimesSearchAdapter(BaseToolAdapter):
 
     @property
     def description(self) -> str:
-        return "搜尋中時新聞網 (ChinaTimes) 新聞內容。支援以實體名稱 (如 '台積電', '賴清德') 查找相關報導。"
+        return "[Tier 2] 搜尋中時新聞網 (ChinaTimes) 新聞內容。適用於查找實體相關報導，引用時請標明媒體名稱。"
 
     @property
     def auth_config(self) -> Dict:
@@ -268,7 +268,7 @@ class ChinaTimesStockRTAdapter(BaseToolAdapter):
 
     @property
     def description(self) -> str:
-        return "獲取台股個股即時行情 (ChinaTimes)。支援上市與上櫃股票代碼 (如 2330)。"
+        return "[Tier 2] 獲取台股個股即時行情 (ChinaTimes)。主流財經媒體數據，引用時請標明來源。"
 
     @property
     def auth_config(self) -> Dict:
@@ -380,7 +380,7 @@ class ChinaTimesStockKlineAdapter(BaseToolAdapter):
 
     @property
     def description(self) -> str:
-        return "獲取台股個股日 K 線歷史數據。支援上市與上櫃股票代碼。回傳包含日期、開盤、最高、最低、收盤價與成交量。"
+        return "[Tier 2] 獲取台股個股日 K 線歷史數據。回傳包含日期、開盤、最高、最低、收盤價與成交量。主流財經媒體數據。"
 
     @property
     def auth_config(self) -> Dict:
