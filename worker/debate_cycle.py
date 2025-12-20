@@ -1651,22 +1651,27 @@ class DebateCycle:
                         # [STRICT TOOL VALIDATION]
                         # Check if the tool is in the equipped list for this agent
                         equipped_tools = self.agent_tools_map.get(agent.name, [])
+                        
+                        # [Governance] Active Fallback for Disabled/Missing Tools (e.g. tej.*)
                         if tool_name not in equipped_tools:
-                            # Bypass validation for special meta-tools if needed, but currently only reset_equipped_tools/call_chairman are meta-tools handled above.
-                            # So this block is for regular tools.
-                            print(f"❌ Blocked: Agent {agent.name} tried to call unequipped tool: {tool_name}")
+                            fallback_tool = None
+                            if tool_name.startswith("tej."):
+                                # Primary fallback for TEJ is official TWSE or Search
+                                if "stock_price" in tool_name: fallback_tool = "financial.get_verified_price"
+                                elif "company_info" in tool_name: fallback_tool = "internal.search_company"
+                                else: fallback_tool = "searxng.search"
                             
-                            error_msg = f"Error: Tool '{tool_name}' is not in your equipped list. You can only use: {equipped_tools}. Use 'reset_equipped_tools' if you need to switch toolsets."
-                            
-                            # Log failure
-                            self._publish_log(f"{agent.name} (System)", f"⛔ 拒絕執行：工具 {tool_name} 未裝備")
-                            
-                            # Append to evidence for context
-                            collected_evidence.append(f"【系統錯誤】調用失敗：{error_msg}")
-                            
-                            # Return error to LLM to correct itself
-                            current_prompt = f"系統錯誤：{error_msg}\n請重新選擇有效的工具或發表言論。"
-                            continue
+                            if fallback_tool and fallback_tool in equipped_tools:
+                                self._publish_log(f"{agent.name} (System)", f"🔄 自動導流：工具 {tool_name} 目前禁用，已切換至 {fallback_tool}")
+                                tool_name = fallback_tool
+                                # Fall through to normal execution with new name
+                            else:
+                                print(f"❌ Blocked: Agent {agent.name} tried to call unequipped tool: {tool_name}")
+                                error_msg = f"Error: Tool '{tool_name}' is disabled or not in your equipped list. You can only use: {equipped_tools}."
+                                self._publish_log(f"{agent.name} (System)", f"⛔ 拒絕執行：工具 {tool_name} 不可用")
+                                collected_evidence.append(f"【系統錯誤】調用失敗：{error_msg}")
+                                current_prompt = f"系統提示：工具「{tool_name}」目前無法使用。請優先改用搜尋或其他可用工具。"
+                                continue
 
                         # --- [Governance Gate] Chairman Approval Check ---
                         tool_meta = tool_registry.get_tool_data(tool_name)
