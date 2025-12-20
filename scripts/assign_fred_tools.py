@@ -26,16 +26,29 @@ def assign_fred_tools():
             "oecd.search_datasets"
         ]
         
-        # Also assign to 'strategic_analysis' toolset if exists
+        # 1. Update Global ToolSet
+        global_ts = db.query(models.ToolSet).filter(models.ToolSet.is_global == True).first()
+        if global_ts:
+            current = list(global_ts.tool_names)
+            added = False
+            for ft in fred_tools:
+                if ft not in current:
+                    current.append(ft)
+                    added = True
+            if added:
+                global_ts.tool_names = current
+                print(f"Updated Global ToolSet '{global_ts.name}' with Macro tools.")
+
+        # 2. Update/Create Macro/Strategic toolsets
         toolsets = db.query(models.ToolSet).filter(models.ToolSet.name.ilike("%strategic%") | models.ToolSet.name.ilike("%macro%")).all()
         
         if not toolsets:
             print("No specific Macro/Strategic toolset found. Creating 'Macro Economics' toolset.")
             new_ts = models.ToolSet(
                 name="Macro Economics",
-                description="Authority tools for US Macro data (FRED).",
+                description="Authority tools for Global & US Macro data (FRED, World Bank, OECD).",
                 tool_names=fred_tools,
-                is_global=True # Make it global so it's easily available for testing
+                is_global=True
             )
             db.add(new_ts)
         else:

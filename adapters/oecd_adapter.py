@@ -8,22 +8,35 @@ class OECDAdapter:
     Provides specialized economic and social indicators for member countries.
     """
     def __init__(self):
-        self.base_url = "https://sdmx.oecd.org/public/rest/data"
+        # .Stat Suite RESTful API compliant URL
+        # Note: OECD public endpoint often uses /public/rest
+        self.base_url = "https://sdmx.oecd.org/public/rest"
         self.name = "oecd"
 
     def _request(self, dataflow: str, key: str = "all", params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Executes a request to the OECD SDMX-JSON API.
-        Example: data/DSD_G20_PRICES@DF_G20_PRICES/all
+        Executes a request to the OECD SDMX-JSON API (.Stat Suite standard).
+        Endpoint pattern: data/{agencyID},{dataflowID},{version}/{key}
         """
         if params is None:
             params = {}
         
-        # Ensure JSON format is requested
+        # Default to JSON format as per .Stat Suite documentation
         params["format"] = "jsondata"
         
-        url = f"{self.base_url}/{dataflow}/{key}"
+        # Standard Dataflow ID often includes Agency (defaulting to OECD)
+        if "," not in dataflow:
+            full_dataflow = f"OECD,{dataflow},latest"
+        else:
+            full_dataflow = dataflow
+
+        # For .Stat Suite, format=jsondata is common
+        if "format" not in params:
+            params["format"] = "jsondata"
+
+        url = f"{self.base_url}/data/{full_dataflow}/{key}"
         try:
+            print(f"DEBUG: OECD Request URL: {url} Params: {params}")
             response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             return response.json()
@@ -34,22 +47,27 @@ class OECDDataTool:
     def __init__(self):
         self.adapter = OECDAdapter()
         self.name = "oecd.get_data"
-        self.description = "Retrieve specialized economic data from OECD using Dataflow ID and optional filters."
+        self.description = "Retrieve specialized economic data from OECD using .Stat Suite RESTful parameters."
         self.schema = {
             "type": "object",
             "properties": {
                 "dataflow": {
-                    "type": "string", 
-                    "description": "The Dataflow ID (e.g., 'DSD_G20_PRICES@DF_G20_PRICES' for inflation).",
+                    "type": "string",
+                    "description": "The Dataflow ID (e.g., 'DSD_G20_PRICES@DF_G20_PRICES').",
                     "default": "DSD_G20_PRICES@DF_G20_PRICES"
                 },
                 "filter_key": {
-                    "type": "string", 
-                    "description": "SDMX filter key (e.g., 'FRA.CP.ALC' for France). Use 'all' for all countries.",
+                    "type": "string",
+                    "description": "SDMX filter key (e.g., 'FRA.CP.ALC'). Use 'all' for complete set.",
                     "default": "all"
                 },
-                "start_period": {"type": "string", "description": "Start year/period (e.g., '2023')."},
-                "end_period": {"type": "string", "description": "End year/period (e.g., '2024')."}
+                "start_period": {"type": "string", "description": "Start year (e.g., '2023')."},
+                "end_period": {"type": "string", "description": "End year (e.g., '2024')."},
+                "dimension_at_observation": {
+                    "type": "string",
+                    "description": "Dimension to use at observation level (default 'AllDimensions').",
+                    "default": "AllDimensions"
+                }
             },
             "required": ["dataflow"]
         }
@@ -57,8 +75,8 @@ class OECDDataTool:
     def describe(self) -> str:
         return self.description
 
-    def invoke(self, dataflow: str, filter_key: str = "all", start_period: str = None, end_period: str = None) -> Dict[str, Any]:
-        params = {}
+    def invoke(self, dataflow: str, filter_key: str = "all", start_period: str = None, end_period: str = None, dimension_at_observation: str = "AllDimensions") -> Dict[str, Any]:
+        params = {"dimensionAtObservation": dimension_at_observation}
         if start_period: params["startPeriod"] = start_period
         if end_period: params["endPeriod"] = end_period
         
