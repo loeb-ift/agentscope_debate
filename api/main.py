@@ -176,6 +176,7 @@ from api.toolset_routes import router as toolset_router
 from api.routers.cache_management import router as cache_router
 from api.routers.eda_routes import router as eda_router
 
+from api.toolset_service import ToolSetService
 app.include_router(agent_router)
 app.include_router(debate_router)
 app.include_router(prompt_router)
