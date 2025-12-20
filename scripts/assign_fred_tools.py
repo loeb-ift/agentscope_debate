@@ -17,7 +17,14 @@ def assign_fred_tools():
         # We search for toolsets often assigned to these roles or just update the global/strategic ones
         
         target_roles = ["macro_strategist", "chief_analyst"]
-        fred_tools = ["fred.search_series", "fred.get_series_observations", "fred.get_latest_release"]
+        fred_tools = [
+            "fred.search_series",
+            "fred.get_series_observations",
+            "fred.get_latest_release",
+            "worldbank.global_inflation",
+            "oecd.get_data",
+            "oecd.search_datasets"
+        ]
         
         # Also assign to 'strategic_analysis' toolset if exists
         toolsets = db.query(models.ToolSet).filter(models.ToolSet.name.ilike("%strategic%") | models.ToolSet.name.ilike("%macro%")).all()
