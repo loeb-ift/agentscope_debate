@@ -112,20 +112,27 @@ chairman.summarize_debate: |
 
   ### 報告結構要求：
 
-  1.  **執行摘要 (Executive Summary)**：
+  1.  **標的實體背景 (Target Entity & Market Context)**：
+      *   **必須置於報告最前端**，協助讀者快速認識討論主體。
+      *   **公司介紹**：主營業務、市場地位、核心技術。
+      *   **產業概況**：所屬行業鏈位置（上中下游）、行業趨勢。
+      *   **競爭格局**：主要競爭對手簡介與市佔對比。
+      *   **當下環境**：目前的宏觀與市場氛圍（如：高利率環境、AI 需求爆發期）。
+
+  2.  **執行摘要 (Executive Summary)**：
       *   一語道破核心分歧（The Core Conflict）。
       *   這場辯論最終解決了什麼？還有什麼未解決？
 
-  2.  **多維度觀點整合 (Synthesis of Perspectives)**：
+  3.  **多維度觀點整合 (Synthesis of Perspectives)**：
       *   整合正反雙方的論點，**消除重複與低層次的口角**。
       *   標示出雙方的**共識基礎 (Common Ground)** 與 **關鍵分歧 (Critical Divergence)**。
 
-  3. **關鍵假設與財務前置條件 (Assumptions & Pre-conditions)**：
+  4.  **關鍵假設與財務前置條件 (Assumptions & Pre-conditions)**：
       *   **強化假設透明度**：指出雙方論點背後的隱性假設。涉及政策時，必須檢查其引用的準確性。
       *   **財務基準校正**：若涉及盈餘或成本預測，主席必須建立統一的「假設基準表 (Assumption Table)」，包含基礎 EPS、毛利基準、負債利率等關鍵數值。
       *   標明目前資訊無法回答的「知識缺口」。
 
-  4. **風險管理與可操作性 (Risk Management)**：
+  5.  **風險管理與可操作性 (Risk Management)**：
       *   **風險指標矩陣（熱力圖呈現）**：列出關鍵風險因子，並設定具體的**多因子數值門檻 (Multivariate Thresholds)**。
           *   **門檻要求**：嚴禁使用模糊的「超過/低於」。必須結合**時間窗口**（如「連續三個月超過 X」）或**相關性指標**（如「X 與 Y 同步偏離 Z%」），以減少偶發性誤報。
           *   **視覺化要求**：必須使用 Markdown 表格或 Mermaid 語法呈現「發生機率 vs 衝擊程度」的視覺化矩陣（例如採用 🟥/🟧/🟨 顏色標記的熱力圖）。
@@ -133,7 +140,7 @@ chairman.summarize_debate: |
       *   **具體操作建議**：說明觸發門檻後的具體動作（如：「若 XX 下跌至 Y 則執行 Z」）。
       *   **事件驅動響應 (Event-Driven Response)**：建立快速響應邏輯。若發生突發事件（如疫情、地緣衝突），說明如何立即調整監控頻率與報表內容。
 
-  5.  **最終裁決與關鍵指標摘要 (Final Verdict & Key Indicators Summary)**：
+  6.  **最終裁決與關鍵指標摘要 (Final Verdict & Key Indicators Summary)**：
       *   **關鍵指標摘要表格**：必須在此章節包含一個 Markdown 表格，整合辯論中涉及的所有核心量化數據。
       *   表格欄位要求：
         | 指標名稱 | 當前數值 | 數據階層 (Tier) | 風險狀態 (及時/預警/觸發) | 數據來源 (URL/Tool) | 性質 (事實/預測/回測) |
@@ -143,7 +150,7 @@ chairman.summarize_debate: |
           *   展示不同杠桿率 (Leverage Ratio) 下的淨利潤與股東權益回報 (ROE) 模擬。
         *   **最終判定**：基於數據階層權重 (T1 > T2 > T3) 給出最終的戰略傾向建議。
 
-  6.  **哲學與戰略層次 (Strategic Level)**：
+  7.  **哲學與戰略層次 (Strategic Level)**：
       *   這不僅僅是技術或財務問題，背後反映了什麼價值觀衝突（如：效率 vs 公平，短期利潤 vs 長期永續）？
 
   ### 寫作原則：
