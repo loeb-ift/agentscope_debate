@@ -51,6 +51,7 @@ class Config:
     # Feature Flags
     ENABLE_CHINATIMES_TOOLS = os.getenv("ENABLE_CHINATIMES_TOOLS", "false").lower() == "true"
     ENABLE_TEJ_TOOLS = os.getenv("ENABLE_TEJ_TOOLS", "false").lower() == "true"
+    FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 
     # Metadata for UI
@@ -73,6 +74,7 @@ class Config:
         "GOOGLE_CSE_ID": "Google Custom Search Engine ID",
         "BRAVE_SEARCH_API_KEY": "Brave Search API Key",
         "TEJ_API_KEY": "TEJ 台灣經濟新報 API Key",
+        "FRED_API_KEY": "FRED (Federal Reserve Economic Data) API Key",
         "LOG_LEVEL": "系統日誌級別 (INFO, DEBUG)",
         "DEFAULT_LANGUAGE": "預設語言 (zh-TW)",
         "REDIS_HOST": "Redis 主機地址",

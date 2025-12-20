@@ -41,6 +41,7 @@ from adapters.tej_adapter import (
     TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo,
     TEJOptionsDailyTrading
 )
+from adapters.fred_adapter import FREDSeriesSearch, FREDSeriesObservations, FREDLatestRelease
 
 class ToolRegistry:
     def __init__(self):
@@ -634,4 +635,9 @@ from adapters.eda_tool_adapter import EDAToolAdapter
 
 tool_registry.register(ODSInternalAdapter(), version="v1", group="eda")
 tool_registry.register(EDAToolAdapter(), version="v1", group="eda")
+
+# Register FRED Macro Tools
+tool_registry.register(FREDSeriesSearch(), version="v1", group="macro")
+tool_registry.register(FREDSeriesObservations(), version="v1", group="macro")
+tool_registry.register(FREDLatestRelease(), version="v1", group="macro")
 
