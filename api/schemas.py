@@ -272,3 +272,43 @@ class PromptTemplate(PromptTemplateBase):
     
     class Config:
         from_attributes = True
+
+# --- Agent Tool Deny & Runtime Attachment Schemas (M2) ---
+
+class AgentToolDenyCreate(BaseModel):
+    tool_name: str
+    reason: Optional[str] = None
+
+class AgentToolDeny(BaseModel):
+    id: str
+    agent_id: str
+    tool_name: str
+    reason: Optional[str] = None
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+class RuntimeAttachmentRequest(BaseModel):
+    tool_name: str
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    expires_at: Optional[datetime.datetime] = None
+
+class RuntimeAttachmentApprove(BaseModel):
+    approved_by: str
+
+class RuntimeAttachment(BaseModel):
+    id: str
+    agent_id: str
+    tool_name: str
+    session_id: Optional[str] = None
+    status: str
+    reason: Optional[str] = None
+    approved_by: Optional[str] = None
+    created_at: datetime.datetime
+    expires_at: Optional[datetime.datetime] = None
+    removed_at: Optional[datetime.datetime] = None
+
+    class Config:
+        from_attributes = True

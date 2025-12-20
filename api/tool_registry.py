@@ -44,6 +44,7 @@ from adapters.tej_adapter import (
 from adapters.fred_adapter import FREDSeriesSearch, FREDSeriesObservations, FREDLatestRelease
 from adapters.worldbank_adapter import WorldBankInflationTool
 from adapters.oecd_adapter import OECDDataTool, OECDSearchTool
+from adapters.stockq_adapter import StockQMarketSummary, StockQIndexDetails
 
 class ToolRegistry:
     def __init__(self):
@@ -649,4 +650,8 @@ tool_registry.register(WorldBankInflationTool(), version="v1", group="macro")
 # Register OECD Macro Tools
 tool_registry.register(OECDDataTool(), version="v1", group="macro")
 tool_registry.register(OECDSearchTool(), version="v1", group="macro")
+
+# Register StockQ Market Tools
+tool_registry.register(StockQMarketSummary(), version="v1", group="market")
+tool_registry.register(StockQIndexDetails(), version="v1", group="market")
 

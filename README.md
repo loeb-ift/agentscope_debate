@@ -318,6 +318,111 @@ curl http://localhost:8000/health
 - [CONTRIBUTING_zh.md](agentscope/CONTRIBUTING_zh.md)
 
 
+## 🛠️ Runtime 工具請求審批流程（前端交互草圖）
+
+流程
+1. Agent 在對話/任務中需要新的工具（不在 effective 清單中），提出 Runtime Request：
+   - POST /api/v1/agents/{id}/runtime-tools/request { tool_name, session_id?, reason }
+2. 後台顯示審批隊列（待審批）：
+   - GET /api/v1/agents/{id}/runtime-tools/requests
+3. 管理員/操作者審批：Approve or Deny
+   - Approve: POST /api/v1/agents/{id}/runtime-tools/{request_id}/approve { approved_by }
+   - Deny: POST /api/v1/agents/{id}/runtime-tools/{request_id}/deny
+4. Agent 重新計算 effective tools（自動快取失效）：
+   - GET /api/v1/agents/{id}/tools/effective
+
+前端 UI 交互草圖（示意）
+```
+[ Agent 設定頁 ]
+┌──────────────────────────────────────────────────────────┐
+│ Agent: analyst-001                                      │
+│ Tabs: 基本資料 | 提示詞 | 工具配置 | 運行請求                       │
+│                                                          │
+│ 工具配置（Effective Tools）                               │
+│  ┌───────────────┬───────────────┬─────────────┬───────┐ │
+│  │ 名稱           │ 來源(source)  │ precedence  │ 狀態  │ │
+│  ├───────────────┼───────────────┼─────────────┼───────┤ │
+│  │ duckduckgo.search │ prompt     │ prompt      │ 可用  │ │
+│  │ web.fetch         │ global     │ global      │ 可用  │ │
+│  │ ...               │ ...        │ ...         │ ...   │ │
+│  └───────────────┴───────────────┴─────────────┴───────┘ │
+│  [新增綁定] [解除綁定] [Deny] [Request Runtime Tool]       │
+│                                                          │
+│ 運行請求（Runtime Requests）                               │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ ID      │ Tool Name        │ Reason           │ 狀態    │ │
+│  ├─────────┼──────────────────┼──────────────────┼────────┤ │
+│  │ r_123   │ web.fetch        │ need http        │ pending │ │
+│  │ r_124   │ duckduckgo.search│ need web search  │ approved│ │
+│  └─────────┴──────────────────┴──────────────────┴────────┘ │
+│  [Approve] [Deny]                                         │
+└──────────────────────────────────────────────────────────┘
+```
+
+API 範例
+```bash
+# 建立 runtime request
+curl -sS -X POST \
+  http://localhost:8000/api/v1/agents/<AGENT_ID>/runtime-tools/request \
+  -H 'Content-Type: application/json' \
+  -d '{"tool_name":"duckduckgo.search","reason":"need web search"}' | jq
+
+# 查詢待審批清單
+curl -sS http://localhost:8000/api/v1/agents/<AGENT_ID>/runtime-tools/requests | jq
+
+# 通過審批
+curl -sS -X POST \
+  http://localhost:8000/api/v1/agents/<AGENT_ID>/runtime-tools/<REQUEST_ID>/approve \
+  -H 'Content-Type: application/json' \
+  -d '{"approved_by":"admin"}' | jq
+
+# 拒絕請求
+curl -sS -X POST \
+  http://localhost:8000/api/v1/agents/<AGENT_ID>/runtime-tools/<REQUEST_ID>/deny | jq
+
+# 重新取得 Effective Tools（可加上 include_precedence / include_denies）
+curl -sS "http://localhost:8000/api/v1/agents/<AGENT_ID>/tools/effective?include_precedence=true" | jq
+```
+
+## 🛠️ Agent Effective Tools API
+
+提供查詢智能體「最終可用工具清單」的 API。
+
+Endpoint
+```http
+GET /api/v1/agents/{agent_id}/tools/effective?include_sources=true&include_precedence=false&include_denies=false
+```
+
+參數
+- include_sources (boolean, 預設 true):
+  - true: 回傳工具並附上來源標籤（source: global/toolset/prompt/runtime）。
+  - false: 僅回傳工具字段，不包含來源標籤。
+- include_precedence (boolean, 預設 false):
+  - true: 額外回傳 precedence 欄位（deny > runtime > prompt > agent_toolset > global）。
+- include_denies (boolean, 預設 false):
+  - true: 回傳格式改為 { tools: [...], denies: [...] }，denies 列出被拒工具。
+
+說明
+- M1：最終清單等同 assigned ∪ global（去重）。
+- M2：加入 deny、prompt 限制、runtime 附加與 precedence 規則，並提供快取與失效點。
+
+環境變數（快取）
+- EFFECTIVE_TOOLS_CACHE: memory | redis（預設 memory）
+- EFFECTIVE_TOOLS_TTL: 整數秒（預設 60）
+- EFFECTIVE_TOOLS_PREFIX: Redis key 前綴（預設 as:cache:）
+
+用法示例
+```bash
+# 預設包含來源
+curl -sS "http://localhost:8000/api/v1/agents/<AGENT_ID>/tools/effective" | jq
+# 僅回傳純工具欄位
+curl -sS "http://localhost:8000/api/v1/agents/<AGENT_ID>/tools/effective?include_sources=false" | jq
+# 回傳 precedence 註解
+curl -sS "http://localhost:8000/api/v1/agents/<AGENT_ID>/tools/effective?include_precedence=true" | jq
+# 回傳被拒工具列表
+curl -sS "http://localhost:8000/api/v1/agents/<AGENT_ID>/tools/effective?include_denies=true" | jq
+```
+
 ## 📄 授權協議
 
 本專案採用 MIT 授權協議 - 詳見 [LICENSE](agentscope/LICENSE) 文件。

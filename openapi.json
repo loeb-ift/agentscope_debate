@@ -5,20 +5,541 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/api/v1/debates": {
+    "/api/v1/agents": {
+      "get": {
+        "summary": "List Agents",
+        "description": "列出所有 Agent。\n可選參數：\n- skip: 跳過的數量（分頁）\n- limit: 返回的最大數量\n- role: 篩選角色（debater, chairman, analyst）",
+        "operationId": "list_agents_api_v1_agents_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
-        "summary": "Create Debate",
-        "description": "創建一個新的辯論。\n接收辯論主題和配置，並觸發背景任務開始辯論。",
-        "operationId": "create_debate_api_v1_debates_post",
+        "summary": "Create Agent",
+        "description": "創建新的 Agent。",
+        "operationId": "create_agent_api_v1_agents_post",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DebateCreate"
+                "$ref": "#/components/schemas/AgentCreate"
               }
             }
           }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id_or_name}": {
+      "get": {
+        "summary": "Get Agent",
+        "description": "獲取特定 Agent 的詳細資訊。\n支援使用 ID 或 Name 進行查找。",
+        "operationId": "get_agent_api_v1_agents__agent_id_or_name__get",
+        "parameters": [
+          {
+            "name": "agent_id_or_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id Or Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}": {
+      "put": {
+        "summary": "Update Agent",
+        "description": "更新 Agent 的資訊。\n只更新提供的欄位（部分更新）。",
+        "operationId": "update_agent_api_v1_agents__agent_id__put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Agent",
+        "description": "刪除 Agent。\n注意：如果 Agent 正在被使用中的辯論引用，應該先檢查。",
+        "operationId": "delete_agent_api_v1_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/roles/available": {
+      "get": {
+        "summary": "Get Available Roles",
+        "description": "獲取可用的 Agent 角色列表。",
+        "operationId": "get_available_roles_api_v1_agents_roles_available_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams": {
+      "get": {
+        "summary": "List Teams",
+        "operationId": "list_teams_api_v1_teams_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Team",
+        "operationId": "create_team_api_v1_teams_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}": {
+      "get": {
+        "summary": "Get Team",
+        "operationId": "get_team_api_v1_teams__team_id__get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Team",
+        "operationId": "update_team_api_v1_teams__team_id__put",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Team",
+        "operationId": "delete_team_api_v1_teams__team_id__delete",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/debates/config": {
+      "post": {
+        "summary": "Create Debate Config",
+        "description": "創建辯論配置。",
+        "operationId": "create_debate_config_api_v1_debates_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DebateConfigCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DebateConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/debates/launch": {
+      "post": {
+        "summary": "Launch Debate",
+        "description": "根據配置 ID 啟動辯論。",
+        "operationId": "launch_debate_api_v1_debates_launch_post",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/debates/new": {
+      "post": {
+        "summary": "Create And Launch Debate",
+        "description": "一鍵：建立新的辯論設定並立即啟動，回傳 new debate_id 與 SSE channel。",
+        "operationId": "create_and_launch_debate_api_v1_debates_new_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DebateConfigCreate"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -40,7 +561,1981 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/replays": {
+      "get": {
+        "summary": "List Replays",
+        "description": "列出所有 Markdown 辯論報告 (按檔名時間戳排序)",
+        "operationId": "list_replays_api_v1_replays_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/replays/{filename}": {
+      "get": {
+        "summary": "Get Replay Content",
+        "description": "獲取指定報告的內容",
+        "operationId": "get_replay_content_api_v1_replays__filename__get",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/replays/{filename}/download": {
+      "get": {
+        "summary": "Download Replay",
+        "description": "下載指定報告",
+        "operationId": "download_replay_api_v1_replays__filename__download_get",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts": {
+      "get": {
+        "summary": "List Prompts",
+        "description": "列出所有 Prompt 模板",
+        "operationId": "list_prompts_api_v1_prompts_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PromptTemplate"
+                  },
+                  "title": "Response List Prompts Api V1 Prompts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       },
+      "post": {
+        "summary": "Create Prompt",
+        "description": "創建新的 Prompt 模板",
+        "operationId": "create_prompt_api_v1_prompts_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptTemplateCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{key}": {
+      "put": {
+        "summary": "Update Prompt",
+        "description": "更新 Prompt 模板",
+        "operationId": "update_prompt_api_v1_prompts__key__put",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "zh-TW",
+              "title": "Language"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptTemplateUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Prompt",
+        "description": "獲取單個 Prompt 模板",
+        "operationId": "get_prompt_api_v1_prompts__key__get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "zh-TW",
+              "title": "Language"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools": {
+      "get": {
+        "summary": "List Tools",
+        "description": "列出所有資料庫中的自定義工具（含一個 TEJ 範例模板）",
+        "operationId": "list_tools_api_v1_tools_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Tool"
+                  },
+                  "title": "Response List Tools Api V1 Tools Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Tool",
+        "description": "創建新的自定義工具並註冊",
+        "operationId": "create_tool_api_v1_tools_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tool"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/templates/tej-stock-price": {
+      "get": {
+        "summary": "Get Tej Stock Price Template",
+        "description": "提供一個可直接在前端載入的 TEJ 風格工具模板（示例）。\n使用者可以：\n  1) 直接 Try-it-out 測試（需改成自己的 URL 或使用已接通的 TEJ 代理）\n  2) 複製為新工具後按需修改欄位\n前端可提示：請將 ${TEJ_API_KEY} 設定於 .env 並在後端適配為 header/query。",
+        "operationId": "get_tej_stock_price_template_api_v1_tools_templates_tej_stock_price_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/{tool_id}": {
+      "get": {
+        "summary": "Get Tool",
+        "description": "獲取單個工具的詳細資訊",
+        "operationId": "get_tool_api_v1_tools__tool_id__get",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tool"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Tool",
+        "description": "更新自定義工具",
+        "operationId": "update_tool_api_v1_tools__tool_id__put",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tool"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Tool",
+        "description": "刪除自定義工具",
+        "operationId": "delete_tool_api_v1_tools__tool_id__delete",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/generate-description": {
+      "post": {
+        "summary": "Generate Tool Description",
+        "description": "使用 LLM 自動生成工具描述",
+        "operationId": "generate_tool_description_api_v1_tools_generate_description_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolDescriptionGenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/try-run": {
+      "post": {
+        "summary": "Try Run Tool",
+        "description": "臨時執行工具（不入庫），用於前端 Try-it-out。\n- 僅支援 http/api 工具型別\n- 直接構建 HTTPToolAdapter 並 invoke\n- 回傳 request/response 摘要與預覽資料",
+        "operationId": "try_run_tool_api_v1_tools_try_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolTryRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolTryRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/similarity": {
+      "post": {
+        "summary": "Calculate Similarity",
+        "description": "計算文本列表的兩兩餘弦相似度矩陣。\n用於前端判斷專長是否過度重疊。",
+        "operationId": "calculate_similarity_api_v1_internal_similarity_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimilarityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/config": {
+      "get": {
+        "summary": "Get Config",
+        "description": "Return list of {key, value, description}",
+        "operationId": "get_config_api_v1_internal_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Update Config",
+        "operationId": "update_config_api_v1_internal_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/companies/last-update": {
+      "get": {
+        "summary": "Get Company Last Update",
+        "description": "Get the last update timestamp of company data",
+        "operationId": "get_company_last_update_api_v1_internal_companies_last_update_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/companies/update-from-web": {
+      "post": {
+        "summary": "Update Companies From Web",
+        "description": "Trigger background task to crawl and update company data from web",
+        "operationId": "update_companies_from_web_api_v1_internal_companies_update_from_web_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/companies": {
+      "get": {
+        "summary": "List Companies",
+        "operationId": "list_companies_api_v1_internal_companies_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "sector",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sector"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group"
+            }
+          },
+          {
+            "name": "sub_industry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sub Industry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Company"
+                  },
+                  "title": "Response List Companies Api V1 Internal Companies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Company",
+        "operationId": "create_company_api_v1_internal_companies_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/industry-tree": {
+      "get": {
+        "summary": "Get Industry Tree",
+        "description": "返回產業鏈樹狀結構：Sector -> Group (Stream) -> Sub-industry -> Companies",
+        "operationId": "get_industry_tree_api_v1_internal_industry_tree_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/sectors": {
+      "get": {
+        "summary": "List Sectors",
+        "description": "返回所有不重複的產業類別",
+        "operationId": "list_sectors_api_v1_internal_sectors_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Sectors Api V1 Internal Sectors Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/companies/{company_id}": {
+      "get": {
+        "summary": "Get Company",
+        "operationId": "get_company_api_v1_internal_companies__company_id__get",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Company Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/securities": {
+      "get": {
+        "summary": "List Securities",
+        "operationId": "list_securities_api_v1_internal_securities_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Security"
+                  },
+                  "title": "Response List Securities Api V1 Internal Securities Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Security",
+        "operationId": "create_security_api_v1_internal_securities_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Security"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/financial_institutions": {
+      "get": {
+        "summary": "List Institutions",
+        "operationId": "list_institutions_api_v1_internal_financial_institutions_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/exchanges": {
+      "get": {
+        "summary": "List Exchanges",
+        "operationId": "list_exchanges_api_v1_internal_exchanges_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/key_personnel": {
+      "get": {
+        "summary": "List Key Personnel",
+        "operationId": "list_key_personnel_api_v1_internal_key_personnel_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/financial_terms": {
+      "get": {
+        "summary": "List Financial Terms",
+        "operationId": "list_financial_terms_api_v1_internal_financial_terms_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FinancialTerm"
+                  },
+                  "title": "Response List Financial Terms Api V1 Internal Financial Terms Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/financial_terms/{term_id}": {
+      "put": {
+        "summary": "Update Financial Term",
+        "operationId": "update_financial_term_api_v1_internal_financial_terms__term_id__put",
+        "parameters": [
+          {
+            "name": "term_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Term Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinancialTermUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialTerm"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/corporate_relationships": {
+      "get": {
+        "summary": "List Corporate Relationships",
+        "operationId": "list_corporate_relationships_api_v1_internal_corporate_relationships_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolsets": {
+      "post": {
+        "summary": "Create Toolset Endpoint",
+        "description": "創建新的工具集。\nPOST /api/v1/toolsets",
+        "operationId": "create_toolset_endpoint_api_v1_toolsets_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSetCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolSet"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Toolsets Endpoint",
+        "description": "列出所有工具集。\nGET /api/v1/toolsets\nGET /api/v1/toolsets?is_global=true",
+        "operationId": "list_toolsets_endpoint_api_v1_toolsets_get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "is_global",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Global"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ToolSet"
+                  },
+                  "title": "Response List Toolsets Endpoint Api V1 Toolsets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolsets/{toolset_id}": {
+      "get": {
+        "summary": "Get Toolset Endpoint",
+        "description": "獲取工具集詳情（包含工具列表）。\nGET /api/v1/toolsets/{toolset_id}",
+        "operationId": "get_toolset_endpoint_api_v1_toolsets__toolset_id__get",
+        "parameters": [
+          {
+            "name": "toolset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Toolset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Toolset Endpoint",
+        "description": "更新工具集。\nPUT /api/v1/toolsets/{toolset_id}",
+        "operationId": "update_toolset_endpoint_api_v1_toolsets__toolset_id__put",
+        "parameters": [
+          {
+            "name": "toolset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Toolset Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSetUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolSet"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Toolset Endpoint",
+        "description": "刪除工具集。\nDELETE /api/v1/toolsets/{toolset_id}",
+        "operationId": "delete_toolset_endpoint_api_v1_toolsets__toolset_id__delete",
+        "parameters": [
+          {
+            "name": "toolset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Toolset Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/toolsets": {
+      "post": {
+        "summary": "Assign Toolset To Agent Endpoint",
+        "description": "分配工具集給 Agent。\nPOST /api/v1/agents/{agent_id}/toolsets",
+        "operationId": "assign_toolset_to_agent_endpoint_api_v1_agents__agent_id__toolsets_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentToolSetAssign"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentToolSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Agent Toolsets Endpoint",
+        "description": "獲取 Agent 的所有工具集。\nGET /api/v1/agents/{agent_id}/toolsets",
+        "operationId": "get_agent_toolsets_endpoint_api_v1_agents__agent_id__toolsets_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/available-tools": {
+      "get": {
+        "summary": "Get Agent Available Tools Endpoint",
+        "description": "獲取 Agent 可用的所有工具。\nGET /api/v1/agents/{agent_id}/available-tools",
+        "operationId": "get_agent_available_tools_endpoint_api_v1_agents__agent_id__available_tools_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/toolsets/{toolset_id}": {
+      "delete": {
+        "summary": "Remove Toolset From Agent Endpoint",
+        "description": "移除 Agent 的工具集分配。\nDELETE /api/v1/agents/{agent_id}/toolsets/{toolset_id}",
+        "operationId": "remove_toolset_from_agent_endpoint_api_v1_agents__agent_id__toolsets__toolset_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "toolset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Toolset Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolsets/initialize-global": {
+      "post": {
+        "summary": "Initialize Global Toolset Endpoint",
+        "description": "初始化全局工具集。\nPOST /api/v1/toolsets/initialize-global",
+        "operationId": "initialize_global_toolset_endpoint_api_v1_toolsets_initialize_global_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/config": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Get Tool Config",
+        "description": "Get current tool registry configuration",
+        "operationId": "get_tool_config_api_v1_cache_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/invalidate": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Invalidate Tool Cache",
+        "description": "Manually invalidate cache for a specific tool (by bumping version salt in memory?)",
+        "operationId": "invalidate_tool_cache_api_v1_cache_invalidate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvalidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/stats": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Get Cache Stats",
+        "description": "Get cache statistics (mock or real)",
+        "operationId": "get_cache_stats_api_v1_cache_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/reload": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Reload Config",
+        "description": "Reload Tool Registry from YAML",
+        "operationId": "reload_config_api_v1_cache_reload_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/eda/describe": {
+      "post": {
+        "tags": [
+          "EDA"
+        ],
+        "summary": "Describe Dataset",
+        "description": "Generate comprehensive EDA report for a CSV dataset.\n\nThis endpoint:\n1. Loads the CSV file (with optional column filtering and sampling)\n2. Generates a ydata-profiling HTML report\n3. Creates basic visualizations (histograms, correlation matrix, boxplots)\n4. Extracts summary statistics to CSV\n\nReturns paths to all generated artifacts and metadata.",
+        "operationId": "describe_dataset_api_eda_describe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EDADescribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EDADescribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/eda/quickplots": {
+      "post": {
+        "tags": [
+          "EDA"
+        ],
+        "summary": "Generate Quick Plots",
+        "description": "Generate specific plots quickly without full profiling report.\n\nThis is a lighter-weight alternative to /describe for cases where\nyou only need specific visualizations.\n\nNote: This endpoint is currently a placeholder for future implementation.",
+        "operationId": "generate_quick_plots_api_eda_quickplots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EDAQuickPlotsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EDAQuickPlotsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/eda/health": {
+      "get": {
+        "tags": [
+          "EDA"
+        ],
+        "summary": "Health Check",
+        "description": "Health check endpoint for EDA service.",
+        "operationId": "health_check_api_eda_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "健康檢查端點，用於確認服務已就緒",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/debates": {
       "get": {
         "summary": "List Debates",
         "description": "列出所有已存檔的辯論。",
@@ -171,239 +2666,11 @@
         }
       }
     },
-    "/tools": {
+    "/api/v1/registry/tools": {
       "get": {
-        "summary": "List Tools",
-        "description": "列出所有可用的工具。",
-        "operationId": "list_tools_tools_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/agents": {
-      "post": {
-        "summary": "Create Agent",
-        "description": "創建一個新的智能體。",
-        "operationId": "create_agent_api_v1_agents_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Agent"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "summary": "List Agents",
-        "description": "列出所有智能體。",
-        "operationId": "list_agents_api_v1_agents_get",
-        "parameters": [
-          {
-            "name": "skip",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 0,
-              "title": "Skip"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 100,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Agent"
-                  },
-                  "title": "Response List Agents Api V1 Agents Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/agents/{agent_id}": {
-      "get": {
-        "summary": "Get Agent",
-        "description": "獲取指定智能體的詳細資訊。",
-        "operationId": "get_agent_api_v1_agents__agent_id__get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Agent"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Update Agent",
-        "description": "更新指定智能體的資訊。",
-        "operationId": "update_agent_api_v1_agents__agent_id__put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Agent"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "summary": "Delete Agent",
-        "description": "刪除指定智能體。",
-        "operationId": "delete_agent_api_v1_agents__agent_id__delete",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/tools": {
-      "get": {
-        "summary": "List Tools",
-        "description": "列出所有已註冊的工具。",
-        "operationId": "list_tools_api_v1_tools_get",
+        "summary": "List Registry Tools",
+        "description": "列出所有已註冊的工具（包括代碼與動態工具）。\n返回統一結構，並安全處理描述欄位：\n{\n  \"tool.name\": {\"name\": \"tool.name\", \"version\": \"v1\", \"description\": \"...\", \"group\": \"...\", \"schema\": {...}}\n}",
+        "operationId": "list_registry_tools_api_v1_registry_tools_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -460,20 +2727,165 @@
         "properties": {
           "name": {
             "type": "string",
-            "title": "Name"
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Agent 名稱"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Agent 角色: debater, chairman, analyst",
+            "default": "debater"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty",
+            "description": "Agent 專長描述"
           },
           "system_prompt": {
             "type": "string",
-            "title": "System Prompt"
+            "minLength": 1,
+            "title": "System Prompt",
+            "description": "系統 Prompt"
           },
           "config_json": {
             "additionalProperties": true,
             "type": "object",
-            "title": "Config Json"
+            "title": "Config Json",
+            "description": "其他配置"
           },
           "id": {
-            "type": "integer",
+            "type": "string",
             "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "system_prompt",
+          "id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Agent",
+        "description": "Agent 回應 Schema"
+      },
+      "AgentCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Agent 名稱"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Agent 角色: debater, chairman, analyst",
+            "default": "debater"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty",
+            "description": "Agent 專長描述"
+          },
+          "system_prompt": {
+            "type": "string",
+            "minLength": 1,
+            "title": "System Prompt",
+            "description": "系統 Prompt"
+          },
+          "config_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config Json",
+            "description": "其他配置"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "system_prompt"
+        ],
+        "title": "AgentCreate",
+        "description": "創建 Agent 的請求 Schema"
+      },
+      "AgentList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "AgentList"
+      },
+      "AgentToolSetAssign": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "Agent ID"
+          },
+          "toolset_id": {
+            "type": "string",
+            "title": "Toolset Id",
+            "description": "ToolSet ID"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "toolset_id"
+        ],
+        "title": "AgentToolSetAssign",
+        "description": "分配工具集給 Agent 的請求 Schema"
+      },
+      "AgentToolSetResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "toolset_id": {
+            "type": "string",
+            "title": "Toolset Id"
           },
           "created_at": {
             "type": "string",
@@ -483,37 +2895,233 @@
         },
         "type": "object",
         "required": [
-          "name",
-          "system_prompt",
-          "config_json",
           "id",
+          "agent_id",
+          "toolset_id",
           "created_at"
         ],
-        "title": "Agent"
+        "title": "AgentToolSetResponse",
+        "description": "Agent-ToolSet 關聯回應 Schema"
       },
-      "AgentCreate": {
+      "AgentUpdate": {
         "properties": {
           "name": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Name"
           },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty"
+          },
           "system_prompt": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "System Prompt"
           },
           "config_json": {
-            "additionalProperties": true,
-            "type": "object",
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Config Json"
           }
         },
         "type": "object",
+        "title": "AgentUpdate",
+        "description": "更新 Agent 的請求 Schema（所有欄位都是可選的）"
+      },
+      "Company": {
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "title": "Company Id"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "ticker_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker Symbol"
+          },
+          "industry_sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry Sector"
+          },
+          "market_cap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Cap"
+          },
+          "country_of_incorporation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Of Incorporation"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
         "required": [
-          "name",
-          "system_prompt",
-          "config_json"
+          "company_id",
+          "company_name",
+          "created_at",
+          "updated_at"
         ],
-        "title": "AgentCreate"
+        "title": "Company"
+      },
+      "CompanyCreate": {
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "title": "Company Id"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "ticker_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker Symbol"
+          },
+          "industry_sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry Sector"
+          },
+          "market_cap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Cap"
+          },
+          "country_of_incorporation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Of Incorporation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "company_id",
+          "company_name"
+        ],
+        "title": "CompanyCreate"
+      },
+      "ConfigUpdate": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "value"
+        ],
+        "title": "ConfigUpdate"
       },
       "DebateArchive": {
         "properties": {
@@ -558,24 +3166,396 @@
         ],
         "title": "DebateArchive"
       },
-      "DebateCreate": {
+      "DebateConfigCreate": {
         "properties": {
           "topic": {
             "type": "string",
             "title": "Topic"
           },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config"
+          "chairman_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chairman Id"
+          },
+          "teams": {
+            "items": {
+              "$ref": "#/components/schemas/TeamConfig"
+            },
+            "type": "array",
+            "title": "Teams"
+          },
+          "rounds": {
+            "type": "integer",
+            "title": "Rounds",
+            "default": 3
+          },
+          "enable_cross_examination": {
+            "type": "boolean",
+            "title": "Enable Cross Examination",
+            "default": true
           }
         },
         "type": "object",
         "required": [
           "topic",
-          "config"
+          "teams"
         ],
-        "title": "DebateCreate"
+        "title": "DebateConfigCreate"
+      },
+      "DebateConfigResponse": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "chairman_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chairman Id"
+          },
+          "teams": {
+            "items": {
+              "$ref": "#/components/schemas/TeamConfig"
+            },
+            "type": "array",
+            "title": "Teams"
+          },
+          "rounds": {
+            "type": "integer",
+            "title": "Rounds",
+            "default": 3
+          },
+          "enable_cross_examination": {
+            "type": "boolean",
+            "title": "Enable Cross Examination",
+            "default": true
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "teams",
+          "id",
+          "created_at"
+        ],
+        "title": "DebateConfigResponse"
+      },
+      "EDADescribeRequest": {
+        "properties": {
+          "csv_path": {
+            "type": "string",
+            "title": "Csv Path",
+            "description": "Absolute path to the CSV file to analyze"
+          },
+          "include_cols": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Cols",
+            "description": "Optional list of column names to include in analysis. If None, analyze all columns."
+          },
+          "sample": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample",
+            "description": "Optional sample size. If provided and dataset has more rows, randomly sample this many rows."
+          },
+          "lang": {
+            "type": "string",
+            "title": "Lang",
+            "description": "Report language. Supported: 'zh' (Chinese), 'en' (English)",
+            "default": "zh"
+          }
+        },
+        "type": "object",
+        "required": [
+          "csv_path"
+        ],
+        "title": "EDADescribeRequest",
+        "description": "Request schema for /eda/describe endpoint.",
+        "example": {
+          "csv_path": "/data/staging/debate_001/2330.TW.csv",
+          "include_cols": [
+            "date",
+            "close",
+            "volume"
+          ],
+          "lang": "zh",
+          "sample": 50000
+        }
+      },
+      "EDADescribeResponse": {
+        "properties": {
+          "report_path": {
+            "type": "string",
+            "title": "Report Path",
+            "description": "Absolute path to the generated HTML report"
+          },
+          "plot_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plot Paths",
+            "description": "List of absolute paths to generated plot images (PNG)"
+          },
+          "table_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Table Paths",
+            "description": "List of absolute paths to generated summary tables (CSV)"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/EDAMetadata",
+            "description": "Metadata about the analysis"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report_path",
+          "meta"
+        ],
+        "title": "EDADescribeResponse",
+        "description": "Response schema for /eda/describe endpoint.",
+        "example": {
+          "meta": {
+            "cols": 5,
+            "engine": "ydata-profiling",
+            "generated_at": "2023-10-27T10:00:00Z",
+            "missing_rate": 0.01,
+            "rows": 1250
+          },
+          "plot_paths": [
+            "/data/plots/debate_001/hist_close.png",
+            "/data/plots/debate_001/corr_matrix.png",
+            "/data/plots/debate_001/box_volume.png"
+          ],
+          "report_path": "/data/reports/debate_001/eda_profile.html",
+          "table_paths": [
+            "/data/tables/debate_001/summary_stats.csv"
+          ]
+        }
+      },
+      "EDAMetadata": {
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "title": "Rows",
+            "description": "Number of rows in the dataset"
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols",
+            "description": "Number of columns in the dataset"
+          },
+          "missing_rate": {
+            "type": "number",
+            "title": "Missing Rate",
+            "description": "Overall missing value rate (0.0 to 1.0)"
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At",
+            "description": "ISO 8601 timestamp when report was generated"
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine",
+            "description": "EDA engine used",
+            "default": "ydata-profiling"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "cols",
+          "missing_rate",
+          "generated_at"
+        ],
+        "title": "EDAMetadata",
+        "description": "Metadata about the generated EDA report.",
+        "example": {
+          "cols": 5,
+          "engine": "ydata-profiling",
+          "generated_at": "2023-10-27T10:00:00Z",
+          "missing_rate": 0.01,
+          "rows": 1250
+        }
+      },
+      "EDAQuickPlotsRequest": {
+        "properties": {
+          "csv_path": {
+            "type": "string",
+            "title": "Csv Path",
+            "description": "Absolute path to the CSV file"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tasks",
+            "description": "List of plot types to generate. Options: 'hist', 'box', 'scatter', 'corr'"
+          }
+        },
+        "type": "object",
+        "required": [
+          "csv_path",
+          "tasks"
+        ],
+        "title": "EDAQuickPlotsRequest",
+        "description": "Request schema for /eda/quickplots endpoint (optional, for future use).",
+        "example": {
+          "csv_path": "/data/staging/debate_001/2330.TW.csv",
+          "tasks": [
+            "hist",
+            "box",
+            "scatter"
+          ]
+        }
+      },
+      "EDAQuickPlotsResponse": {
+        "properties": {
+          "plot_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plot Paths",
+            "description": "List of absolute paths to generated plots"
+          }
+        },
+        "type": "object",
+        "title": "EDAQuickPlotsResponse",
+        "description": "Response schema for /eda/quickplots endpoint."
+      },
+      "FinancialTerm": {
+        "properties": {
+          "term_id": {
+            "type": "string",
+            "title": "Term Id"
+          },
+          "term_name": {
+            "type": "string",
+            "title": "Term Name"
+          },
+          "term_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Term Category"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "term_id",
+          "term_name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FinancialTerm"
+      },
+      "FinancialTermUpdate": {
+        "properties": {
+          "term_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Term Name"
+          },
+          "term_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Term Category"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          }
+        },
+        "type": "object",
+        "title": "FinancialTermUpdate"
       },
       "HTTPValidationError": {
         "properties": {
@@ -589,6 +3569,952 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InvalidateRequest": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name"
+        ],
+        "title": "InvalidateRequest"
+      },
+      "PromptTemplate": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "zh-TW"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "content",
+          "id"
+        ],
+        "title": "PromptTemplate"
+      },
+      "PromptTemplateCreate": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "zh-TW"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "content"
+        ],
+        "title": "PromptTemplateCreate"
+      },
+      "PromptTemplateUpdate": {
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "title": "PromptTemplateUpdate"
+      },
+      "Security": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "security_name": {
+            "type": "string",
+            "title": "Security Name"
+          },
+          "security_type": {
+            "type": "string",
+            "title": "Security Type"
+          },
+          "issuer_company_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer Company Id"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "isin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isin"
+          },
+          "market_cap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Cap"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "security_id",
+          "security_name",
+          "security_type",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Security"
+      },
+      "SecurityCreate": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "security_name": {
+            "type": "string",
+            "title": "Security Name"
+          },
+          "security_type": {
+            "type": "string",
+            "title": "Security Type"
+          },
+          "issuer_company_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer Company Id"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "isin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isin"
+          },
+          "market_cap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Cap"
+          }
+        },
+        "type": "object",
+        "required": [
+          "security_id",
+          "security_name",
+          "security_type"
+        ],
+        "title": "SecurityCreate"
+      },
+      "SimilarityRequest": {
+        "properties": {
+          "texts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Texts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "texts"
+        ],
+        "title": "SimilarityRequest"
+      },
+      "Team": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Member Ids",
+            "default": []
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Team"
+      },
+      "TeamConfig": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "side": {
+            "type": "string",
+            "title": "Side",
+            "description": "pro, con, or neutral"
+          },
+          "agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agent Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "side",
+          "agent_ids"
+        ],
+        "title": "TeamConfig"
+      },
+      "TeamCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Member Ids",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TeamCreate"
+      },
+      "TeamList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Team"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TeamList"
+      },
+      "TeamUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "member_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Ids"
+          }
+        },
+        "type": "object",
+        "title": "TeamUpdate"
+      },
+      "Tool": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "default": "api"
+          },
+          "json_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Json Schema"
+          },
+          "api_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Config"
+          },
+          "python_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Python Code"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "default": "basic"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": "v1"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "openapi_spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi Spec"
+          },
+          "auth_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Type"
+          },
+          "auth_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Config"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit"
+          },
+          "cache_ttl": {
+            "type": "integer",
+            "title": "Cache Ttl",
+            "default": 3600
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "timeout": {
+            "type": "integer",
+            "title": "Timeout",
+            "default": 15
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "json_schema",
+          "id"
+        ],
+        "title": "Tool"
+      },
+      "ToolCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "default": "api"
+          },
+          "json_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Json Schema"
+          },
+          "api_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Config"
+          },
+          "python_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Python Code"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "default": "basic"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": "v1"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "openapi_spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi Spec"
+          },
+          "auth_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Type"
+          },
+          "auth_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Config"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit"
+          },
+          "cache_ttl": {
+            "type": "integer",
+            "title": "Cache Ttl",
+            "default": 3600
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "timeout": {
+            "type": "integer",
+            "title": "Timeout",
+            "default": 15
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "json_schema"
+        ],
+        "title": "ToolCreate"
+      },
+      "ToolDescriptionGenerate": {
+        "properties": {
+          "tool_type": {
+            "type": "string",
+            "title": "Tool Type"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_type",
+          "content"
+        ],
+        "title": "ToolDescriptionGenerate"
+      },
+      "ToolSet": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "description": "工具集名稱"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "工具集描述"
+          },
+          "tool_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tool Names",
+            "description": "工具名稱列表"
+          },
+          "is_global": {
+            "type": "boolean",
+            "title": "Is Global",
+            "description": "是否為全局工具集",
+            "default": false
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "tool_names",
+          "id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ToolSet",
+        "description": "工具集回應 Schema"
+      },
+      "ToolSetCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "description": "工具集名稱"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "工具集描述"
+          },
+          "tool_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tool Names",
+            "description": "工具名稱列表"
+          },
+          "is_global": {
+            "type": "boolean",
+            "title": "Is Global",
+            "description": "是否為全局工具集",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "tool_names"
+        ],
+        "title": "ToolSetCreate",
+        "description": "創建工具集的請求 Schema"
+      },
+      "ToolSetUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tool_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Names"
+          },
+          "is_global": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Global"
+          }
+        },
+        "type": "object",
+        "title": "ToolSetUpdate",
+        "description": "更新工具集的請求 Schema（所有欄位都是可選的）"
       },
       "ToolTest": {
         "properties": {
@@ -608,6 +4534,281 @@
           "kwargs"
         ],
         "title": "ToolTest"
+      },
+      "ToolTryRunRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "default": "http"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": "v1"
+          },
+          "api_config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Api Config"
+          },
+          "json_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Schema"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "api_config"
+        ],
+        "title": "ToolTryRunRequest",
+        "description": "臨時執行工具（不入庫）請求。\n- 沿用現有自建工具結構，支援 http/api 型別\n- api_config 與 json_schema 與現有 Tool 結構一致\n- params 為本次請求的參數（將作為 query 或 json 傳遞）"
+      },
+      "ToolTryRunResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request"
+          },
+          "response": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Response"
+          },
+          "preview_rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Preview Rows",
+            "default": []
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Ms"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "request",
+          "response",
+          "elapsed_ms"
+        ],
+        "title": "ToolTryRunResponse",
+        "description": "Try-it-out 回應摘要"
+      },
+      "ToolUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "json_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Schema"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "openapi_spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi Spec"
+          },
+          "auth_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Type"
+          },
+          "auth_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Config"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit"
+          },
+          "cache_ttl": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Ttl"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout"
+          }
+        },
+        "type": "object",
+        "title": "ToolUpdate",
+        "description": "更新工具的請求 Schema（所有欄位都是可選的）"
       },
       "ValidationError": {
         "properties": {

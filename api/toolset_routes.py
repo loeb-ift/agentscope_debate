@@ -13,6 +13,11 @@ from api.toolset_schemas import (
 )
 from api.toolset_service import ToolSetService
 from api.database import SessionLocal
+from api.schemas import (
+    AgentToolDenyCreate, AgentToolDeny,
+    RuntimeAttachmentRequest, RuntimeAttachmentApprove,
+    RuntimeAttachment as RuntimeAttachmentSchema,
+)
 
 router = APIRouter()
 
@@ -231,10 +236,28 @@ def get_agent_toolsets_endpoint(agent_id: str, db: Session = Depends(get_db)):
         "toolsets": assigned_toolsets
     }
 
+@router.delete("/api/v1/agents/{agent_id}/toolsets/{toolset_id}", status_code=204)
+def unassign_toolset_from_agent(agent_id: str, toolset_id: str, db: Session = Depends(get_db)):
+    """
+    取消分配工具集。
+    DELETE /api/v1/agents/{agent_id}/toolsets/{toolset_id}
+    """
+    assignment = db.query(models.AgentToolSet).filter(
+        models.AgentToolSet.agent_id == agent_id,
+        models.AgentToolSet.toolset_id == toolset_id
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+        
+    db.delete(assignment)
+    db.commit()
+    return None
+
 @router.get("/api/v1/agents/{agent_id}/available-tools")
 def get_agent_available_tools_endpoint(agent_id: str, db: Session = Depends(get_db)):
     """
-    獲取 Agent 可用的所有工具。
+    獲取 Agent 可用的所有工具（assigned ∪ global）。
     GET /api/v1/agents/{agent_id}/available-tools
     """
     agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
@@ -243,6 +266,47 @@ def get_agent_available_tools_endpoint(agent_id: str, db: Session = Depends(get_
     
     tools = ToolSetService.get_agent_available_tools(db, agent_id)
     return tools
+
+@router.get("/api/v1/agents/{agent_id}/tools/effective")
+def get_agent_effective_tools_endpoint(
+    agent_id: str,
+    include_sources: bool = True,
+    include_precedence: bool = False,
+    include_denies: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    最小可用版：獲取 Agent 的最終可用工具清單。
+    目前等價於 available-tools（assigned ∪ global）。
+    後續將納入 prompt 限制、runtime 附件與 deny/precedence 規則。
+    Query:
+    - include_sources: 是否保留來源與工具集標籤（source, toolset_name）。預設 True。
+    GET /api/v1/agents/{agent_id}/tools/effective
+    """
+    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    tools = ToolSetService.get_agent_effective_tools(db, agent_id, include_precedence=include_precedence, include_denies=include_denies)
+    if include_denies:
+        # when include_denies, service returns an object
+        if not include_sources:
+            # strip sources from tool entries
+            tools['tools'] = [
+                {k: v for k, v in t.items() if k not in ('source', 'toolset_name', 'precedence')}
+                for t in tools['tools']
+            ]
+        return tools
+    if include_sources:
+        return tools
+    # strip source annotations for minimal list
+    sanitized = []
+    for t in tools:
+        t2 = dict(t)
+        t2.pop('source', None)
+        t2.pop('toolset_name', None)
+        sanitized.append(t2)
+    return sanitized
 
 @router.delete("/api/v1/agents/{agent_id}/toolsets/{toolset_id}", status_code=204)
 def remove_toolset_from_agent_endpoint(
@@ -264,10 +328,87 @@ def remove_toolset_from_agent_endpoint(
     
     db.delete(assignment)
     db.commit()
-    
+    ToolSetService.invalidate_agent_cache(agent_id)
     return None
 
 # --- Initialization ---
+
+# --- Agent DENY tools (M2) ---
+
+@router.post("/api/v1/agents/{agent_id}/tools/deny", response_model=AgentToolDeny, status_code=201)
+def deny_tool_for_agent(agent_id: str, payload: AgentToolDenyCreate, db: Session = Depends(get_db)):
+    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    row = models.AgentToolDeny(agent_id=agent_id, tool_name=payload.tool_name, reason=payload.reason)
+    db.add(row); db.commit(); db.refresh(row)
+    ToolSetService.invalidate_agent_cache(agent_id)
+    return row
+
+@router.get("/api/v1/agents/{agent_id}/tools/deny", response_model=List[AgentToolDeny])
+def list_agent_denies(agent_id: str, db: Session = Depends(get_db)):
+    rows = db.query(models.AgentToolDeny).filter(models.AgentToolDeny.agent_id == agent_id).all()
+    return rows
+
+@router.delete("/api/v1/agents/{agent_id}/tools/deny/{tool_name}", status_code=204)
+def remove_agent_deny(agent_id: str, tool_name: str, db: Session = Depends(get_db)):
+    row = db.query(models.AgentToolDeny).filter(
+        models.AgentToolDeny.agent_id == agent_id,
+        models.AgentToolDeny.tool_name == tool_name
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Deny not found")
+    db.delete(row); db.commit(); ToolSetService.invalidate_agent_cache(agent_id); return None
+
+# --- Runtime attachments (M2) ---
+
+@router.post("/api/v1/agents/{agent_id}/runtime-tools/request", response_model=RuntimeAttachmentSchema, status_code=201)
+def request_runtime_tool(agent_id: str, payload: RuntimeAttachmentRequest, db: Session = Depends(get_db)):
+    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    row = models.RuntimeAttachment(
+        agent_id=agent_id,
+        tool_name=payload.tool_name,
+        session_id=payload.session_id,
+        status='pending',
+        reason=payload.reason,
+        expires_at=payload.expires_at
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+@router.post("/api/v1/agents/{agent_id}/runtime-tools/{request_id}/approve", response_model=RuntimeAttachmentSchema)
+def approve_runtime_tool(agent_id: str, request_id: str, payload: RuntimeAttachmentApprove, db: Session = Depends(get_db)):
+    row = db.query(models.RuntimeAttachment).filter(
+        models.RuntimeAttachment.id == request_id,
+        models.RuntimeAttachment.agent_id == agent_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Request not found")
+    row.status = 'approved'
+    row.approved_by = payload.approved_by
+    db.commit(); db.refresh(row)
+    ToolSetService.invalidate_agent_cache(agent_id)
+    return row
+
+@router.post("/api/v1/agents/{agent_id}/runtime-tools/{request_id}/deny", response_model=RuntimeAttachmentSchema)
+def deny_runtime_tool(agent_id: str, request_id: str, db: Session = Depends(get_db)):
+    row = db.query(models.RuntimeAttachment).filter(
+        models.RuntimeAttachment.id == request_id,
+        models.RuntimeAttachment.agent_id == agent_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Request not found")
+    row.status = 'denied'
+    db.commit(); db.refresh(row)
+    ToolSetService.invalidate_agent_cache(agent_id)
+    return row
+
+@router.get("/api/v1/agents/{agent_id}/runtime-tools/requests", response_model=List[RuntimeAttachmentSchema])
+def list_runtime_tool_requests(agent_id: str, db: Session = Depends(get_db)):
+    rows = db.query(models.RuntimeAttachment).filter(models.RuntimeAttachment.agent_id == agent_id).all()
+    return rows
 
 @router.post("/api/v1/toolsets/initialize-global")
 def initialize_global_toolset_endpoint(db: Session = Depends(get_db)):

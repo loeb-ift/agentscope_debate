@@ -139,6 +139,36 @@ class DebateTeam(Base):
     agent_ids = Column(JSON, nullable=False) # List of Agent IDs
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+class AgentToolDeny(Base):
+    """
+    Agent 級別的工具封鎖（顯式 DENY）。
+    """
+    __tablename__ = 'agent_tool_denies'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(36), nullable=False, index=True)
+    tool_name = Column(String(200), nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class RuntimeAttachment(Base):
+    """
+    智能體在運行期間請求附加的工具（需審批）。
+    status: pending/approved/denied
+    """
+    __tablename__ = 'runtime_attachments'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(36), nullable=False, index=True)
+    tool_name = Column(String(200), nullable=False)
+    session_id = Column(String(100), nullable=True)
+    status = Column(String(20), default='pending')
+    reason = Column(Text, nullable=True)
+    approved_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    removed_at = Column(DateTime(timezone=True), nullable=True)
+
 class Team(Base):
     """
     Persistent Team Model (團隊模型).

@@ -212,6 +212,11 @@ tool_info = tool_registry.get_tool_info(tool_name, version)
 ### 最近調整（2025-12-19）
 - 手動端點測試腳本移動至 `scripts/tools/test_api_endpoints.py`，避免與 pytest 冒煙測試重疊
 - EDA 整合驗證合併為 `scripts/verify_eda_financial_integration.py`（已移除 v2 版本）
+- 新增 Effective Tools 端點：`GET /api/v1/agents/{agent_id}/tools/effective`
+  - Query: `include_sources`（預設 true）、`include_precedence`（預設 false）、`include_denies`（預設 false）
+  - M1：等同 assigned ∪ global（去重）
+  - M2：已加入 deny、prompt 限制、runtime 附件與 precedence 計算（deny > runtime > prompt > agent_toolset > global）
+  - `include_denies=true` 時，回傳 `{ tools: [...], denies: [...] }`
 
 ### 待實現
 1. 更新 `debate_cycle.py` 使用動態工具列表

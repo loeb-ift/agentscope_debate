@@ -158,6 +158,14 @@ async def startup_event():
     
     print("✅ API initialization complete!")
 
+# Configure toolset cache backend (Memory by default; switchable to Redis via env)
+from api.cache_backends import MemoryCache, RedisCache
+import os
+if os.getenv("EFFECTIVE_TOOLS_CACHE", "memory").lower() == "redis":
+    ToolSetService.configure_cache_backend(RedisCache())
+else:
+    ToolSetService.configure_cache_backend(MemoryCache())
+
 # --- Include Routers ---
 from api.agent_routes import router as agent_router
 from api.debate_routes import router as debate_router

@@ -1136,6 +1136,7 @@ def main():
                                     agent_role = gr.Dropdown(choices=["debater", "chairman", "analyst"], label="角色", value="debater")
                                 
                                 agent_specialty = gr.Textbox(label="專長", placeholder="例如: 經濟學、哲學")
+                                agent_toolsets = gr.Dropdown(label="分配工具集 (ToolSets)", multiselect=True, choices=[])
                                 agent_prompt = gr.TextArea(label="系統提示詞 (System Prompt)", lines=10, placeholder="你是...")
                                 # Fallback to TextArea for compatibility if Code component is missing or problematic
                                 agent_config = gr.TextArea(label="設定 (JSON)", lines=5, value="{}")
@@ -1147,39 +1148,89 @@ def main():
                         # --- Agent Logic ---
                         def load_agent_to_edit(agent_id):
                             if not agent_id:
-                                return (gr.Tabs(selected="agent_list_tab"), None, "", "debater", "", "", "{}")
+                                return (gr.Tabs(selected="agent_list_tab"), None, "", "debater", "", [], "", "{}")
                             try:
+                                agent_id = extract_id_from_dropdown(agent_id)
+                                # 1. Fetch Agent basic info
                                 response = requests.get(f"{API_URL}/agents/{agent_id}")
                                 response.raise_for_status()
                                 data = response.json()
+                                
+                                # 2. Fetch Agent's assigned toolsets
+                                ts_response = requests.get(f"{API_URL}/agents/{agent_id}/toolsets")
+                                assigned_toolsets = []
+                                if ts_response.status_code == 200:
+                                    ts_data = ts_response.json()
+                                    # Only include 'assigned' ones, as 'global' are automatic
+                                    assigned_toolsets = [ts['id'] for ts in ts_data.get('toolsets', []) if ts.get('source') == 'assigned']
+                                
                                 return (
                                     gr.Tabs(selected="agent_edit_tab"), # Switch to Edit Tab
                                     agent_id,
-                                    data['name'], 
+                                    data['name'],
                                     data['role'],
                                     data.get('specialty', ''),
+                                    assigned_toolsets,
                                     data['system_prompt'],
                                     json.dumps(data.get('config_json', {}), indent=2, ensure_ascii=False)
                                 )
-                            except:
-                                return (gr.Tabs(selected="agent_list_tab"), None, "Error", "debater", "", "", "{}")
+                            except Exception as e:
+                                print(f"Error loading agent: {e}")
+                                return (gr.Tabs(selected="agent_list_tab"), None, "Error", "debater", "", [], "", "{}")
 
-                        def save_agent(aid, name, role, spec, prompt, conf):
-                            if aid:
-                                res = update_agent(aid, name, role, spec, prompt, conf)
-                            else:
-                                res = create_agent(name, role, spec, prompt, conf)
-                            # Return to list tab after save
-                            return res, gr.Tabs(selected="agent_list_tab")
+                        def save_agent(aid, name, role, spec, tsets, prompt, conf):
+                            try:
+                                if aid:
+                                    # Update basic info
+                                    res = update_agent(aid, name, role, spec, prompt, conf)
+                                    
+                                    # Update ToolSet associations
+                                    # 1. Get current assigned
+                                    ts_curr_resp = requests.get(f"{API_URL}/agents/{aid}/toolsets")
+                                    curr_ids = []
+                                    if ts_curr_resp.status_code == 200:
+                                        curr_ids = [ts['id'] for ts in ts_curr_resp.json().get('toolsets', []) if ts.get('source') == 'assigned']
+                                    
+                                    # 2. Diff and update
+                                    to_add = set(tsets) - set(curr_ids)
+                                    to_remove = set(curr_ids) - set(tsets)
+                                    
+                                    for tsid in to_add:
+                                        requests.post(f"{API_URL}/agents/{aid}/toolsets", json={"agent_id": aid, "toolset_id": tsid})
+                                    for tsid in to_remove:
+                                        requests.delete(f"{API_URL}/agents/{aid}/toolsets/{tsid}")
+                                        
+                                else:
+                                    # Create new
+                                    config_json = json.loads(conf) if conf else {}
+                                    payload = {
+                                        "name": name, "role": role, "specialty": spec,
+                                        "system_prompt": prompt, "config_json": config_json
+                                    }
+                                    resp = requests.post(f"{API_URL}/agents", json=payload)
+                                    resp.raise_for_status()
+                                    new_id = resp.json()['id']
+                                    
+                                    # Assign toolsets
+                                    for tsid in tsets:
+                                        requests.post(f"{API_URL}/agents/{new_id}/toolsets", json={"agent_id": new_id, "toolset_id": tsid})
+                                    res = f"✅ Agent '{name}' 創建成功！"
+                                    
+                                return res, gr.Tabs(selected="agent_list_tab")
+                            except Exception as e:
+                                return f"❌ 保存失敗：{str(e)}", gr.update()
 
                         def reset_edit_form():
                              return (
                                 gr.Tabs(selected="agent_list_tab"),
-                                None, "", "debater", "", "", "{}" # Clear fields
+                                None, "", "debater", "", [], "", "{}" # Clear fields
                             )
 
                         def update_agent_dropdown():
                             return gr.update(choices=get_agent_choices())
+                        
+                        def update_agent_toolset_choices():
+                            return gr.update(choices=get_toolset_choices())
 
                         refresh_agents_btn.click(format_agent_list, outputs=agents_table)
                         refresh_agent_select_btn.click(update_agent_dropdown, outputs=selected_agent_id_input)
@@ -1188,19 +1239,19 @@ def main():
                         agent_list_tab.select(update_agent_dropdown, outputs=selected_agent_id_input)
 
                         load_agent_btn.click(
-                            load_agent_to_edit, 
-                            inputs=[selected_agent_id_input], 
-                            outputs=[agent_tabs, agent_id_state, agent_name, agent_role, agent_specialty, agent_prompt, agent_config]
+                            load_agent_to_edit,
+                            inputs=[selected_agent_id_input],
+                            outputs=[agent_tabs, agent_id_state, agent_name, agent_role, agent_specialty, agent_toolsets, agent_prompt, agent_config]
                         )
                         
                         cancel_edit_btn.click(
                             reset_edit_form,
-                            outputs=[agent_tabs, agent_id_state, agent_name, agent_role, agent_specialty, agent_prompt, agent_config]
+                            outputs=[agent_tabs, agent_id_state, agent_name, agent_role, agent_specialty, agent_toolsets, agent_prompt, agent_config]
                         )
                         
                         save_agent_btn.click(
                             save_agent,
-                            inputs=[agent_id_state, agent_name, agent_role, agent_specialty, agent_prompt, agent_config],
+                            inputs=[agent_id_state, agent_name, agent_role, agent_specialty, agent_toolsets, agent_prompt, agent_config],
                             outputs=[agent_op_msg, agent_tabs]
                         ).success(format_agent_list, outputs=agents_table).success(update_agent_dropdown, outputs=selected_agent_id_input)
                         
@@ -1212,6 +1263,7 @@ def main():
 
                         demo.load(format_agent_list, outputs=agents_table)
                         demo.load(update_agent_dropdown, outputs=selected_agent_id_input)
+                        demo.load(update_agent_toolset_choices, outputs=agent_toolsets)
 
                     # Sub-tab 1.3: 團隊管理
                     with gr.TabItem("👥 團隊管理"):

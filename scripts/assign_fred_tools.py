@@ -23,12 +23,14 @@ def assign_fred_tools():
             "fred.get_latest_release",
             "worldbank.global_inflation",
             "oecd.get_data",
-            "oecd.search_datasets"
+            "oecd.search_datasets",
+            "stockq.market_summary",
+            "stockq.index_details"
         ]
         
         # 1. Update Global ToolSet
-        global_ts = db.query(models.ToolSet).filter(models.ToolSet.is_global == True).first()
-        if global_ts:
+        global_toolsets = db.query(models.ToolSet).filter(models.ToolSet.is_global == True).all()
+        for global_ts in global_toolsets:
             current = list(global_ts.tool_names)
             added = False
             for ft in fred_tools:

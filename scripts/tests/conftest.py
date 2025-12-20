@@ -51,6 +51,14 @@ def test_client(monkeypatch):
     except Exception:
         pass
 
+    # Ensure DB tables exist for tests (create all models)
+    try:
+        from api.database import engine
+        from api import models as _models
+        _models.Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
+
     # Tool registry and dynamic tools
     class _FakeRegistry:
         def __init__(self):
