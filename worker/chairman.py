@@ -1005,38 +1005,109 @@ JSON 必須包含以下欄位：
             | :--- | :--- | :--- | :--- |
             | ... | ... | ... | ... |
 
-        ## 5. 最終裁決與行動建議 (Verdict & Action)
+        ## 5. 最終裁決與實證摘要 (Verdict & Evidence Summary)
         *   **勝負傾向**：(可選)
         *   **共識事實**：雙方都認同的客觀點。
+
+        ## 6. 行動建議框架 (Draft Actionable Framework)
+        *   請根據辯論結果，為投資者、政策制定者與企業主分別構思 3 個初步的操作步驟與對應的 KPI。
+        *   注意：你必須在此處為每個 KPI 指定一個建議的**驗證工具**（例如：twse.stock_day, worldbank.*, fred.*, stockq.*）。
 
         請使用繁體中文，語氣專業且具建設性。
         """
         # Call LLM for Initial Verdict
-        initial_verdict = await call_llm_async(prompt, system_prompt="你是辯論主席，請依照指示生成結構化結案報告。", context_tag=f"{debate_id}:Chairman:FinalVerdict")
+        initial_verdict = await call_llm_async(prompt, system_prompt="你是辯論主席，請依照指示生成結構化結案報告並初步構思行動建議。", context_tag=f"{debate_id}:Chairman:FinalVerdict")
         
         # 4. Extended Research for Actionable Advice
         extended_research_data = await self._conduct_extended_research(topic, initial_verdict, debate_id)
         
-        # 5. Generate Final Actionable Advice
+        # 5. Generate Final Actionable Advice (with Tool Use Capability)
         db = SessionLocal()
         try:
              advice_template = PromptService.get_prompt(db, "chairman.generate_advice")
              if not advice_template:
-                 # Fallback if prompt not loaded in DB yet
-                 advice_template = """
-                 請基於辯論結論「{verdict}」與延伸調查「{research_data}」，為用戶生成具體的「下一步行動建議」。
-                 包含：具體操作步驟、監測指標、溝通建議。
-                 """
+                 advice_template = "請基於辯論結論與延伸調查，為用戶生成具體的「下一步行動建議」。"
         finally:
              db.close()
              
-        advice_prompt = advice_template.format(
-            topic=topic,
-            verdict=initial_verdict[-500:], # Pass context
-            research_data=extended_research_data
-        )
+        # Inject context and force tool use instructions
+        advice_instruction = f"""
+        【重要任務】基於以下辯論結論與初步調查，產出最終的「下一步行動建議」報告。
         
-        actionable_advice = await call_llm_async(advice_prompt, system_prompt="你是專業投資顧問。", context_tag=f"{debate_id}:Chairman:FinalAdvice")
+        ### 任務要求：
+        1. **實作與驗證**：你必須將辯論中產出的初步建議與實際蒐集到的實證數據（Initial Research Data）進行強制對齊。
+        2. **數據驅動報告**：在「實證狀態 (Evidence)」欄位中，必須引用具體的數值（例如：'2023 Inflation: 3.1%'），嚴禁使用「已確認」等模糊字眼。
+        3. **量化 KPI**：所有操作步驟必須對應一個可度量的數值門檻。
+
+        ### 報告結構 (Markdown Table):
+        | 參與者 | 操作步驟 | 可使用工具 / 資源 | 具體指標 (KPI) | 實證狀態 (Evidence) |
+        | :--- | :--- | :--- | :--- | :--- |
+        | 投資者 | 1. ... 2. ... | ... | ... | [實證數據或遺漏說明] |
+        | 政策制定者 | ... | ... | ... | ... |
+        | 企業主 | ... | ... | ... | ... |
+
+        ### 辯論結論
+        {initial_verdict[-2000:]}
+        
+        ### 初步研究數據
+        {extended_research_data}
+        
+        ### 要求
+        1. 你必須針對「投資者」、「政策制定者」與「企業主」分別產出包含 KPI 的操作表格。
+        2. **必須調用工具**：若表格中提到的 KPI 需要具體數值（如：某公司的毛利率基準、某國的最新 CPI），請立即調用工具獲取，不可編造。
+        3. 請確保報告結構完整，包含：行動建議表格、監測機制、資訊傳遞建議。
+        """
+        
+        # Equip chairman with strategic tools for final advice refinement
+        final_research_tools = []
+        target_tools = ["twse.stock_day", "chinatimes.financial_ratios", "fred.get_latest_release", "worldbank.global_inflation"]
+        for t_name in target_tools:
+            try:
+                t_data = tool_registry.get_tool_data(t_name)
+                final_research_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t_name,
+                        "description": t_data.get('description', ''),
+                        "parameters": t_data.get('schema', {})
+                    }
+                })
+            except: pass
+
+        # Run a multi-step loop for advice generation to allow data gathering
+        current_advice_prompt = advice_instruction
+        actionable_advice = ""
+        max_advice_steps = 3
+        
+        from worker.tool_invoker import call_tool
+        loop = asyncio.get_running_loop()
+
+        for step in range(max_advice_steps):
+            self._publish_log(debate_id, f"📝 正在精煉行動建議 (Step {step+1}/3)...")
+            response = await call_llm_async(
+                current_advice_prompt,
+                system_prompt="你是首席投資顧問，負責產出具備量化指標的行動指南。",
+                tools=final_research_tools,
+                context_tag=f"{debate_id}:Chairman:ActionableAdvice"
+            )
+            
+            # Check for tool calls
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                try:
+                    tool_call = json.loads(json_match.group(0))
+                    if "tool" in tool_call and "params" in tool_call:
+                        t_name = tool_call["tool"]
+                        t_params = tool_call["params"]
+                        self._publish_log(debate_id, f"🛠️ 顧問精煉調用工具: {t_name}")
+                        res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                        current_advice_prompt += f"\n\n工具 {t_name} 回傳數據：\n{json.dumps(res, ensure_ascii=False)}\n請繼續完成建議報告。"
+                        continue
+                except: pass
+            
+            # If no tool call, this is our final advice
+            actionable_advice = response
+            break
         
         # Combine
         final_conclusion = initial_verdict + "\n\n" + actionable_advice

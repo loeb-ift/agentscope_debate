@@ -9,7 +9,8 @@ import random
 from api.redis_client import get_redis_client
 
 # 定義可供輪轉的引擎池
-ENGINES_POOL = ["google", "bing", "duckduckgo", "brave", "qwant"]
+# 將 duckduckgo 與 bing 往前排，因為它們對機器人調用相對寬容
+ENGINES_POOL = ["duckduckgo", "bing", "google", "brave", "qwant"]
 
 # Lazy import to avoid circular dependency if possible, or just import
 # from adapters.google_cse_adapter import GoogleCSEAdapter
@@ -98,6 +99,8 @@ class SearXNGAdapter(ToolAdapter):
                 print(f"[SearXNG Rotation] Round-robin selected engine: {selected_engine} (Index: {engine_idx})")
             except Exception as re:
                 print(f"⚠️ Redis rotation failed, using SearXNG default: {re}")
+                # Fallback to a random choice to still achieve some balancing
+                params["engines"] = random.choice(ENGINES_POOL)
         else:
             params["engines"] = engines
 
@@ -149,14 +152,16 @@ class SearXNGAdapter(ToolAdapter):
                     print(f"🔄 Retrying search in {wait_time:.1f}s... (Attempt {attempt+1}/{max_retries})")
                     
                     # Strategy: Switch Engines on failure
-                    # If initial was default (Brave/Google), try DuckDuckGo which is more lenient
-                    if "engines" not in params or params["engines"] != "duckduckgo":
-                        print("👉 Switching engine to 'duckduckgo' for retry.")
+                    # If current engine failed, try the next one in the pool for retry
+                    current_engine = params.get("engines")
+                    if current_engine in ENGINES_POOL:
+                        curr_idx = ENGINES_POOL.index(current_engine)
+                        next_engine = ENGINES_POOL[(curr_idx + 1) % len(ENGINES_POOL)]
+                        print(f"👉 {current_engine} failed, switching to {next_engine} for retry.")
+                        params["engines"] = next_engine
+                    else:
+                        print("👉 No specific engine bound, falling back to 'duckduckgo' for retry.")
                         params["engines"] = "duckduckgo"
-                    elif params["engines"] == "duckduckgo":
-                        # If DDG also failed, try Qwant or Bing if configured, or remove engine constraint to let SearXNG decide
-                        print("👉 DuckDuckGo failed, removing engine constraint.")
-                        params.pop("engines", None)
                         
                     time.sleep(wait_time)
                     continue
