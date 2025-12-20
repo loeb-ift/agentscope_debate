@@ -84,13 +84,18 @@ def get_agent(agent_id_or_name: str, db: Session = Depends(get_db)):
     if not agent:
          # Check common suffixes based on roles (with space before)
          # e.g. "Name (analyst)" -> remove " (analyst)"
-         for role_suffix in ["(analyst)", "(debater)", "(chairman)"]:
+         # ALSO handle plain role names which might be passed in some contexts
+         for role_suffix in ["(analyst)", "(debater)", "(chairman)", "(Unknown)"]:
              suffix = f" {role_suffix}"
              if agent_id_or_name.endswith(suffix):
                  potential_name = agent_id_or_name[:-len(suffix)]
                  agent = db.query(models.Agent).filter(models.Agent.name == potential_name).first()
                  if agent:
                      break
+         
+         # 4. If still not found and it's a role name, return the first agent with that role
+         if not agent and agent_id_or_name.lower() in ['chairman', 'debater', 'analyst']:
+             agent = db.query(models.Agent).filter(models.Agent.role == agent_id_or_name.lower()).first()
     
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id_or_name}")
