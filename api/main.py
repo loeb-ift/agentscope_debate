@@ -25,6 +25,7 @@ from api.redis_client import get_redis_client
 from adapters.searxng_adapter import SearXNGAdapter
 from adapters.duckduckgo_adapter import DuckDuckGoAdapter
 from adapters.yfinance_adapter import YFinanceAdapter
+from adapters.finmind_adapter import FinMindAdapter
 # Lazy import helper for conditional tools
 def lazy_import_factory(module_name, class_name):
     def factory():
@@ -102,6 +103,7 @@ async def startup_event():
     tool_registry.register(SearXNGAdapter())
     tool_registry.register(DuckDuckGoAdapter())
     tool_registry.register(YFinanceAdapter())
+    tool_registry.register(FinMindAdapter())
     
     # Register ODS Internal Adapter
     from adapters.ods_internal_adapter import ODSInternalAdapter

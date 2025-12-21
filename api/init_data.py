@@ -170,7 +170,7 @@ def initialize_toolsets(db: Session):
             "tools": [
                 "tej.stock_price", "tej.futures_data", "tej.options_daily_trading", "tej.financial_cover_cumulative",
                 "chinatimes.stock_kline", "chinatimes.market_rankings", "chinatimes.stock_rt", "chinatimes.financial_ratios",
-                "searxng.search"
+                "finmind.data_loader", "searxng.search"
             ],
             "target_roles": ["量化分析師"]
         },
