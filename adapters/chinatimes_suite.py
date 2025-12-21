@@ -71,21 +71,31 @@ class ChinaTimesSearchAdapter(BaseToolAdapter):
                 "properties": {
                     "keyword": {
                         "type": "string",
-                        "description": "搜尋關鍵字。必須是實體名稱 (Entity Name)，如 '台積電', '賴清德', 'iPhone'。"
+                        "description": "搜尋關鍵字。必須是實體名稱 (Entity Name), 如 '台積電', '2480'。"
+                    },
+                    "q": {
+                        "type": "string",
+                        "description": "搜尋關鍵字 (Alias for keyword)。"
                     },
                     "reason": {
                         "type": "string",
-                        "description": "調用此工具的理由。說明為什麼需要這個事實支持。"
+                        "description": "調用此工具的理由。"
                     }
                 },
-                "required": ["keyword"]
+                "required": []
             }
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct aliases
+        if "keyword" not in params:
+            for alias in ["q", "query", "keyword", "code", "symbol"]:
+                if alias in params:
+                    params["keyword"] = params[alias]
+                    break
+        
         if "keyword" not in params:
             raise ValueError("缺少必要參數: keyword")
-        # reason 非強制，若無則在 invoke 中使用預設值
 
     def auth(self, req: Dict) -> Dict:
         return req
