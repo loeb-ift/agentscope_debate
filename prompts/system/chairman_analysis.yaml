@@ -461,9 +461,9 @@ chairman.pre_debate_analysis: |
   ### 5.1 **優先級排序**（按來源權威性 + 結構化程度）
 
   **Tier 1 - 權威數據 (Authoritative)**：
-  - **來源**：交易所 (TWSE)、官方財報數據庫 (TEJ)、政府公告、API 直接回傳的結構化數據。
-  - **特徵**：結構化、不可篡改、具備唯一性。
-  - **適用**：股價、營收、淨利、官方政策條文。
+  - **來源**：交易所 (TWSE)、官方財報數據庫 (MOPS/TEJ)、各國財政部與央行 (如美國財政部 Treasury.gov、歐洲央行 ECB)、官方統計局。
+  - **特徵**：原始數據、結構化、具備法律效力。
+  - **適用**：精確 EVA 分析 (僅限 SEC/TEJ)、通脹 KPI、利率走勢、官方政策。
   - **工具**：`chinatimes.stock_rt`, `chinatimes.stock_fundamental`, `tej_tool`。
 
   **Tier 2 - 可信報導 (Journalistic)**：

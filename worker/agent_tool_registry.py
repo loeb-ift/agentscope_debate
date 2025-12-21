@@ -56,3 +56,9 @@ try:
     register_tool("delivery.push_report", _trigger_report_push)
 except Exception:
     pass
+
+try:
+    from eda_engine import run_eda_pipeline as _run_eda_pipeline
+    register_tool("analytics.run_eda", _run_eda_pipeline)
+except Exception:
+    pass

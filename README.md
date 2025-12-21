@@ -1,5 +1,7 @@
 # AgentScope 自動化 AI 辯論平台
 
+[![CI](https://github.com/loeb-ift/agentscope_debate/actions/workflows/ci.yml/badge.svg)](https://github.com/loeb-ift/agentscope_debate/actions/workflows/ci.yml)
+
 這是一個基於 AgentScope 框架開發的自動化 AI 辯論平台，支援多個 AI 代理針對特定主題進行結構化辯論，並整合多種外部工具來增強論點質量。
 
 ## 🎯 平台特色
@@ -66,6 +68,47 @@ cd agentscope_debate
 
 # 執行部署腳本
 bash scripts/tmp_rovodev_first_deploy.sh
+
+## 🧰 Makefile 常用指令
+```bash
+make bootstrap   # 一鍵部署（compose → init_db → prompts → toolset → seed → smoke）
+make up          # 啟動容器
+make down        # 停止並清除容器/volume
+make test        # 執行 scripts/tests 下所有測試
+make smoke       # 執行冒煙測試
+make openapi     # 重新生成 openapi.json
+```
+
+## ✅ Preflight 檢查
+在首次嘗試部署前，建議先執行預檢：
+```bash
+python scripts/preflight_check.py
+```
+若有缺少環境或無法連線 Redis，會以 [FAIL]/[WARN] 顯示並返回非零碼。
+
+## 🐳 各系統 Docker 注意事項與常見問題
+- macOS（Apple Silicon）
+  - 請確保 Docker Desktop 已啟動，且已安裝 QEMU（Docker Desktop 會自動處理多架構）
+  - 若遇到 port 被佔用（如 8000），請先關閉佔用程式或修改 docker-compose 暴露的埠
+  - 檔案系統快取：首次 compose 會較慢，之後會快很多
+- Windows（WSL2 建議）
+  - 推薦安裝 Docker Desktop 並啟用 WSL2 整合
+  - Git 交換行符差異（CRLF vs LF）可能導致 shell 腳本執行失敗，請在 Git 設定 core.autocrlf=input 或使用 WSL 內執行腳本
+  - 若 PowerShell 執行腳本時遇到權限問題，請以 bash 或 WSL 執行
+- Linux
+  - 需自行安裝 docker 與 docker compose（或使用 Docker Compose V2）
+  - 若遇到 permission denied，檢查目前使用者是否在 docker 群組內
+  - 防火牆限制可能導致容器無法對外連線，請確認網路政策
+
+常見錯誤排解
+- /health 無法通過
+  - 使用 `docker compose logs -f api worker` 查看錯誤
+  - 確認 .env 設定與必要 API Key 是否存在（或先以最少需求模式跑起）
+- openapi.json 無回應
+  - 等待服務啟動完成，或檢查依賴的服務（如 Redis）
+- Redis 無法連線
+  - 若使用 memory cache：設定 `EFFECTIVE_TOOLS_CACHE=memory`
+  - 若使用 Redis：確認 REDIS_URL；在本機執行 `redis-cli -u $REDIS_URL PING` 應回覆 PONG
 ```
 
 #### 2. 🛠️ 手動逐步啟動

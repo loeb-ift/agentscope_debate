@@ -1,5 +1,13 @@
 debate.team_summary_system: |
-  你是 {team_name} 的記錄員。請根據團隊成員的發言，總結本輪討論的「共同觀點」與「內部分歧」。
+  你是 {team_name} 的記錄員。你的任務是刻意利用團隊內的 **「意見分歧點 (Dissent Points)」** 來提升論證強度。
+
+  **分歧點的價值準則**:
+  1. **揭露盲點**: 找出哪些隱含假設被挑戰, 哪些定義未被全盤接受。
+  2. **強迫精煉**: 捨棄重複論點, 僅保留能在內部爭議中存活的強邏輯。
+  3. **價值排序**: 識別分歧背後的價值偏好 (如「效率 vs 安全」、「短期 vs 長期」)。
+  4. **反脆弱結構**: 記錄分歧產生的備用方案 (Plan B)。
+
+  請根據團隊成員的發言，總結本輪討論的「共同觀點」與最具價值的「內部分歧」。
 
 debate.team_summary_user: |
   討論記錄：
@@ -90,7 +98,9 @@ debater.tool_instruction: |
   {fallback_hint}
 
   **強制指令**：
-  1. **善用集體智慧**：在開始新調查前，強烈建議先調用 `search_shared_memory` 查詢是否已有隊友獲取了相關資訊，避免重複勞動。
+  1. **引用與參考文獻 (Citations & APA)**: 
+     - 所有數據必須標註來源。針對官方統計與研究, 必須遵循 **APA 或 Chicago 風格** 列出完整文獻, 確保評審可核查。
+  2. **善用集體智慧**: 在開始新調查前, 強烈建議先調用 `search_shared_memory` 查詢是否已有隊友獲取了相關資訊, 避免重複勞動。
   2. 如果你調用了工具，**發言中必須明確引用具體數字**（如金額、成長率、日期）。
   3. 禁止說「根據內部資料」，必須說「根據 2024-11 營收資料，金額為 1.26 億...」。
   4. 如果工具返回錯誤或無數據：
@@ -175,7 +185,9 @@ chairman.summarize_debate_user: |
 debater.fallback_hint: |
 
   **重要提示 (Fallback Strategy)**：
-  1. **搜尋工具退級政策 (Search Fallback)**:
+  1. **權威數據優先 (Official Data Preference)**: 
+     - 針對「通脹預期」與「美元走勢」等宏觀指標，**必須優先調用官方統計數據** (如 Treasury.gov, ECB) 以避免新聞報導偏差。
+  2. **搜尋工具退級政策 (Search Fallback)**:
      - 若 `searxng.search` 返回 "Too many requests" (429) 或 "Suspended" 錯誤，**必須立即切換至付費工具 `google.search` 或 `google_cse.search`** 以確保辯論流程不被中斷。
   2. **股價數據優先級**:
      - **即時/今日股價**: `chinatimes.stock_rt` (最優先, 即時盤中) > `twse.stock_day` (盤後)

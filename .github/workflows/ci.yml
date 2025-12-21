@@ -19,18 +19,100 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cache_backend: [memory, redis]
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install backend deps (if present)
+      - name: Install Python deps
         run: |
+          pip install -r requirements.txt || true
           if [ -f api/requirements.txt ]; then pip install -r api/requirements.txt; fi
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Run backend tests
+          pip install pytest requests
+      - name: Start services with docker compose
         run: |
-          if [ -d tests ]; then pytest -q || true; fi
+          docker compose up -d --build
+          sleep 5
+      - name: Wait for health
+        run: |
+          for i in {1..60}; do curl -sf http://localhost:8000/health && break || sleep 2; done
+      - name: Initialize data (prompts/global/seed)
+        env:
+          EFFECTIVE_TOOLS_CACHE: ${{ matrix.cache_backend }}
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          python - <<'PY'
+from scripts.refresh_prompts import main as refresh_main
+refresh_main()
+print('OK refresh_prompts')
+PY
+          curl -sf -X POST http://localhost:8000/api/v1/toolsets/initialize-global
+          python - <<'PY'
+from api.init_data import initialize_all
+from api.database import SessionLocal
+db=SessionLocal(); initialize_all(db); db.close(); print('OK seed agents')
+PY
+      - name: Validate deploy-check
+        env:
+          EXPECT_BACKEND: ${{ matrix.cache_backend }}
+        run: |
+          python - <<'PY'
+import json, os, sys, urllib.request
+url = 'http://localhost:8000/api/v1/health/deploy-check'
+with urllib.request.urlopen(url) as r:
+    data = json.loads(r.read().decode('utf-8'))
+print('deploy-check:', data)
+expect = os.getenv('EXPECT_BACKEND')
+if data.get('cache_backend') != expect:
+    print(f"[FAIL] cache_backend mismatch: {data.get('cache_backend')} != {expect}")
+    sys.exit(1)
+if not data.get('global_toolset'):
+    print("[FAIL] global_toolset missing in deploy-check")
+    sys.exit(1)
+# Optional: check fingerprints present (not empty)
+if not data.get('prompts_checksum') or not data.get('toolsets_fingerprint'):
+    print("[FAIL] missing checksums in deploy-check")
+    sys.exit(1)
+print('[OK] deploy-check validated')
+PY
+      - name: Strict baseline check (if baseline file exists)
+        env:
+          EXPECT_BACKEND: ${{ matrix.cache_backend }}
+        run: |
+          if [ -f docs/deploy_baseline.json ]; then \
+            python - <<'PY'
+import json, sys, urllib.request
+url = 'http://localhost:8000/api/v1/health/deploy-check'
+with urllib.request.urlopen(url) as r:
+    live = json.loads(r.read().decode('utf-8'))
+with open('docs/deploy_baseline.json','r',encoding='utf-8') as f:
+    base = json.load(f)
+errs=[]
+for k in ('cache_backend','prompts_checksum','toolsets_fingerprint'):
+    if str(live.get(k)) != str(base.get(k)):
+        errs.append(f"mismatch {k}: live={live.get(k)} base={base.get(k)}")
+if errs:
+    print('[FAIL] baseline mismatches:\n'+'\n'.join(errs))
+    sys.exit(1)
+print('[OK] baseline matched')
+PY
+          else echo "No baseline file found, skipping strict check"; fi
+      - name: Run API tests (smoke + effective tools)
+        env:
+          EFFECTIVE_TOOLS_CACHE: ${{ matrix.cache_backend }}
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest -q scripts/tests/test_smoke_api.py -q
+          pytest -q scripts/tests/test_effective_tools_api.py -q
+          pytest -q scripts/tests/test_effective_tools_precedence_and_prompt.py -q
+          pytest -q scripts/tests/test_effective_tools_cache_invalidation.py -q
 
   frontend-tests:
     runs-on: ubuntu-latest

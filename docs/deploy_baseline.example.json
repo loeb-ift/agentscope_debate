@@ -1,0 +1,5 @@
+{
+  "cache_backend": "memory",
+  "prompts_checksum": "<sha256 of prompts/**/*.yaml>",
+  "toolsets_fingerprint": "<sha256 of toolsets & tools>"
+}
