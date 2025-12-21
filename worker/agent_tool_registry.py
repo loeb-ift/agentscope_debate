@@ -44,3 +44,15 @@ try:
     register_tool("price_proof.get", _coordinated_price_proof)
 except Exception:
     pass
+
+try:
+    from sec_edgar_tool import get_sec_company_facts as _sec_company_facts
+    register_tool("sec.company_facts", _sec_company_facts)
+except Exception:
+    pass
+
+try:
+    from push_notifier import trigger_report_push as _trigger_report_push
+    register_tool("delivery.push_report", _trigger_report_push)
+except Exception:
+    pass

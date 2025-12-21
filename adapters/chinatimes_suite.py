@@ -1236,8 +1236,14 @@ class ChinaTimesBalanceSheetAdapter(ChinaTimesBaseFinancialAdapter):
         params = kwargs
         self.validate(params)
         code = params["code"]
-        url = f"http://10.228.7.79/api/finweb/stk_tw/{code}/f1"
+        # 自動偵測市場類型 (Listing Detection)
+        # 邏輯: 8系列、6系列通常為 OTC 或興櫃
+        is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
+        mkt_tag = "stk_otc" if is_otc else "stk_tw"
+        
+        url = f"http://10.228.7.79/api/finweb/{mkt_tag}/{code}/f1"
         try:
+            print(f"[DEBUG] Fetching Balance Sheet from {url}")
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
                  return ToolResult(data={"error": f"API Error {response.status_code}"}, raw={}, used_cache=False, cost=0.0, citations=[])
@@ -1279,7 +1285,9 @@ class ChinaTimesIncomeStatementAdapter(ChinaTimesBaseFinancialAdapter):
         params = kwargs
         self.validate(params)
         code = params["code"]
-        url = f"http://10.228.7.79/api/finweb/stk_tw/{code}/f2"
+        is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
+        mkt_tag = "stk_otc" if is_otc else "stk_tw"
+        url = f"http://10.228.7.79/api/finweb/{mkt_tag}/{code}/f2"
         try:
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
@@ -1322,7 +1330,9 @@ class ChinaTimesCashFlowAdapter(ChinaTimesBaseFinancialAdapter):
         params = kwargs
         self.validate(params)
         code = params["code"]
-        url = f"http://10.228.7.79/api/finweb/stk_tw/{code}/f3"
+        is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
+        mkt_tag = "stk_otc" if is_otc else "stk_tw"
+        url = f"http://10.228.7.79/api/finweb/{mkt_tag}/{code}/f3"
         try:
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
@@ -1365,7 +1375,9 @@ class ChinaTimesFinancialRatiosAdapter(ChinaTimesBaseFinancialAdapter):
         params = kwargs
         self.validate(params)
         code = params["code"]
-        url = f"http://10.228.7.79/api/finweb/stk_tw/{code}/f4"
+        is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
+        mkt_tag = "stk_otc" if is_otc else "stk_tw"
+        url = f"http://10.228.7.79/api/finweb/{mkt_tag}/{code}/f4"
         try:
             response = requests.get(url, timeout=10)
             if response.status_code != 200:

@@ -14,10 +14,14 @@ debate.tool_selection_user: |
   可用工具列表：
   {tools_list_text}
 
-  請分析辯題與你的立場，選擇 3-5 個最關鍵的工具。
-  **重要：** 請仔細查看每個工具描述中的 **Schema**，選擇那些輸入/輸出欄位最符合你數據需求的工具。不要僅憑工具名稱猜測功能。
+  請分析辯題與你的立場,選擇 3-5 個最關鍵的工具。
 
-  **語言提示**：若辯題涉及國際議題，請優先選擇搜尋引擎工具，並準備使用英文進行查詢以獲取最佳結果（但在辯論時使用中文）。
+  **地緣範疇決策 (Geographic Context)**:
+  - **台灣國內議題**: 優先選擇 `chinatimes.*`, `twse.*` 與 `tej.*`。
+  - **海外議題 (如美股)**: 優先選擇 `sec.company_facts` 並搭配 `searxng.search` (建議使用英文 keyword)。
+  - **跨國連動 (如台灣看世界)**: 必須平衡選擇國內外工具,進行供應鏈與財務的交叉驗證。
+
+  **重要：** 請仔細查看每個工具描述中的 **Schema**。
 
   **TEJ 工具護欄（重要）**：
   - 使用 TEJ 類工具（名稱以 `tej.` 開頭）時，必須遵守參數規範：
@@ -53,7 +57,10 @@ debate.hierarchical_summarizer: |
 
 debater.operational_rules: |
   **系統操作規範 (Operational Rules)**：
-  1. **工具優先**：必須先使用工具獲取真實數據，再發表論點。
+  1. **跨市場數據流 (Market-Agnostic Data Flow)**：遵循「Orchestrator -> Data -> Engine -> Gate」架構。
+     - **事實層 (Data Layer)**: 美股優先使用 SEC EDGAR XBRL，台股優先使用 TEJ 權威財報數據。
+     - **引擎層 (Engine Layer)**: 無論市場，必須產出標準化指標：FCF, ROIC, Invested Capital, 與 ROIC 均值回歸路徑。
+     - **守門員 (Gate Layer)**: 如果 ROIC < WACC，必須強制限制 DCF 終端成長率假設。
   2. **精準調用**：仔細閱讀工具 Schema。TEJ 工具必須提供 `coid` (公司代碼)，請參考【重要常數】。
   3. **時間感知**：工具日期參數 (start_date/end_date) 必須根據問題時間動態計算，不可省略。
   4. **輸出格式**：調用工具時，必須輸出純 JSON，不要包含 Markdown 代碼塊或其他文字。
@@ -167,8 +174,10 @@ chairman.summarize_debate_user: |
 
 debater.fallback_hint: |
 
-  💡 **重要提示 (Fallback Strategy)**：
-  1. **股價數據優先級**:
+  **重要提示 (Fallback Strategy)**：
+  1. **搜尋工具退級政策 (Search Fallback)**:
+     - 若 `searxng.search` 返回 "Too many requests" (429) 或 "Suspended" 錯誤，**必須立即切換至付費工具 `google.search` 或 `google_cse.search`** 以確保辯論流程不被中斷。
+  2. **股價數據優先級**:
      - **即時/今日股價**: `chinatimes.stock_rt` (最優先, 即時盤中) > `twse.stock_day` (盤後)
      - **歷史回測**: `tej.stock_price` (優先) > `chinatimes.stock_kline` (近期趨勢)
   2. **遇到空數據時**: 若 `tej` 回傳空列表 `[]`，這通常是因為資料庫尚未更新至 2025 年。請立即改用 `chinatimes.stock_rt` 或 `twse.stock_day` 查詢最新數據。

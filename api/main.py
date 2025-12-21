@@ -168,6 +168,9 @@ else:
     ToolSetService.configure_cache_backend(MemoryCache())
 
 # --- Include Routers ---
+from api.routers import deploy_check
+app.include_router(deploy_check.router)
+
 from api.agent_routes import router as agent_router
 from api.debate_routes import router as debate_router
 from api.prompt_routes import router as prompt_router
