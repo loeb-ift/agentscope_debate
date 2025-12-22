@@ -81,13 +81,20 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
     async def _investigate_topic_async(self, topic: str, debate_id: str = None) -> str:
         """
         Async implementation of investigation loop.
+        [Optimized] Added Macro and Industry tools to context.
         """
-        self._publish_log(debate_id, "🕵️ 主席正在進行背景調查 (Entity Recognition)...")
+        self._publish_log(debate_id, "🕵️ 主席正在進行背景調查 (Entity/Macro/Industry Recognition)...")
         
-        # 1. Prepare Tools (Search & TEJ + ODS)
+        # 1. Prepare Tools (Search & TEJ + Macro + Industry)
         investigation_tools = []
         from api.config import Config
-        target_tool_names = ["searxng.search"]
+        target_tool_names = [
+            "searxng.search", 
+            "av.CPI", 
+            "av.EXCHANGE_RATE", 
+            "internal.get_industry_tree",
+            "chinatimes.stock_fundamental"
+        ]
         if Config.ENABLE_TEJ_TOOLS:
             target_tool_names += ["tej.company_info", "tej.stock_price"]
         
@@ -105,7 +112,6 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
                     if "type" not in schema: schema["type"] = "object"
                     if "properties" not in schema: schema["properties"] = {}
                 
-                # Fix: description might be a dict (metadata) or a string
                 desc = tool_data.get('description', '')
                 if isinstance(desc, dict):
                     desc = desc.get('description', '')
@@ -126,94 +132,72 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
 
         # 2. Prompt for Investigation
         prompt = f"""
-請對辯題「{topic}」進行嚴格的背景事實調查 (Fact-Checking)。
+請對辯題「{topic}」進行全方位的背景事實調查 (Fact-Checking)。
 
 **核心任務**：
-1. **識別實體**：找出公司全名與股票代碼 (e.g., 森鉅 -> 8942)。
-2. **產業定位**：確認其主要產品與所屬產業。
-   - ⚠️ 注意：不要依賴直覺猜測產業。若 TEJ/ChinaTimes 查無資料，**必須**使用 `searxng.search` 搜尋「{{公司名}} 做什麼」或「{{公司名}} 產品」。
-   - 範例：森鉅 (8942) 是做「金屬複合板/建材」，絕非電子股。請務必核實。
-3. **數據檢核**：確認是否能獲取財務數據。若無法獲取，請標記為「數據缺失」。
+1. **識別實體與代碼**：找出公司全名與台股代碼 (e.g., 2330, 2480)。
+2. **宏觀環境數據**：若涉及股價漲跌，**必須**檢查相關宏觀指標。
+   - **通膨**：調用 `av.CPI`。
+   - **匯率**：調用 `av.EXCHANGE_RATE` (如：USD/TWD)。
+3. **產業鏈定位**：調用 `internal.get_industry_tree` 確認公司所屬產業鏈位置及上下游關係。
+4. **基本面初探**：調用 `chinatimes.stock_fundamental` 獲取官方診斷數據。
 
-調查結束後，請總結你獲得的關鍵背景資訊（公司全名、代碼、確切產業、主要產品）。
+調查結束後，請總結關鍵資訊（代碼、產業鏈位置、CPI/匯率現狀、公司面臨的具體量化挑戰）。
+**嚴禁編造數據，若查無資料請誠實說明。**
 """
-        # 3. Execution Loop (Simple 1-turn or 2-turn)
-        context = []
-        
-        # Turn 1: Ask LLM to use tools
-        self._publish_log(debate_id, "🕵️ 正在思考需要的調查工具...")
-        response = await call_llm_async(prompt, system_prompt="你是辯論主席，負責賽前事實核查。", tools=investigation_tools, context_tag=f"{debate_id}:Chairman:Investigate")
-        
+        # 3. Execution Loop (Multi-turn to allow multiple tool calls)
         tool_results = []
         lc = EvidenceLifecycle(debate_id or "global")
         
-        try:
-            # Try to extract JSON tool call
+        # [Phase 23 Update] Increased to 3 turns for better depth
+        current_p = prompt
+        for turn in range(3):
+            self._publish_log(debate_id, f"🕵️ 調查思考中 (Turn {turn+1}/3)...")
+            response = await call_llm_async(current_p, system_prompt="你是首席調查員，善於交叉利用宏觀與微觀工具。", tools=investigation_tools, context_tag=f"{debate_id}:Chairman:Investigate:{turn}")
+            
+            # Extract JSON tool call
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
-                tool_call = json.loads(json_match.group(0))
-                if isinstance(tool_call, dict) and "tool" in tool_call:
-                    t_name = tool_call["tool"]
-                    t_params = tool_call["params"]
-                    
-                    self._publish_log(debate_id, f"🛠️ 主席調用工具: {t_name} {t_params}")
-                    
-                    # Execute
-                    from worker.tool_invoker import call_tool
-                    loop = asyncio.get_running_loop()
-                    
-                    try:
-                        res = await loop.run_in_executor(None, call_tool, t_name, t_params)
-                        if not res or (isinstance(res, dict) and (res.get("error") or not (res.get("data") or res.get("results") or res.get("content")))):
-                             raise ValueError(f"Tool {t_name} failed or returned empty")
-                    except Exception as e_tool:
-                        self._publish_log(debate_id, f"⚠️ 主席工具調用失敗 ({t_name})，嘗試 Fallback: {e_tool}")
-                        if t_name.startswith("tej."):
-                            if "price" in t_name:
-                                res = await self._fallback_from_tej_price(t_params, debate_id)
-                            else:
-                                fallback_tool = "searxng.search"
-                                self._publish_log(debate_id, f"🔄 主席自動 Fallback: {t_name} -> {fallback_tool}")
-                                res = await loop.run_in_executor(None, call_tool, fallback_tool, t_params)
-                        else:
-                            self._publish_log(debate_id, f"❌ 調查工具 {t_name} 完全失敗。")
-                            res = None
-
-                    if res:
-                        doc = lc.ingest(self.name, t_name, t_params, res)
-                        doc = lc.verify(doc.id)
+                try:
+                    tool_call = json.loads(json_match.group(0))
+                    if isinstance(tool_call, dict) and "tool" in tool_call:
+                        t_name = tool_call["tool"]
+                        t_params = tool_call["params"]
                         
-                        if doc.status == "VERIFIED":
-                            tool_results.append(f"工具 {t_name} 結果 (Verified): {json.dumps(res, ensure_ascii=False)}")
-                            self._publish_log(debate_id, f"✅ 證據已驗證並入庫 (ID: {doc.id})")
-                        elif doc.status == "QUARANTINE":
-                            tool_results.append(f"工具 {t_name} 結果異常 (Quarantined): {doc.verification_log[-1].get('reason')}")
-                            self._publish_log(debate_id, f"⚠️ 證據異常，已隔離。")
-                    
-        except Exception as e:
-            print(f"Investigation tool error: {e}")
+                        self._publish_log(debate_id, f"🛠️ 調用工具: {t_name}")
+                        from worker.tool_invoker import call_tool
+                        loop = asyncio.get_running_loop()
+                        
+                        res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                        
+                        # Store and Verify
+                        if res:
+                            doc = lc.ingest(self.name, t_name, t_params, res)
+                            doc = lc.verify(doc.id)
+                            if doc.status == "VERIFIED":
+                                tool_results.append(f"[{t_name}] 結果: {json.dumps(res, ensure_ascii=False)}")
+                                current_p += f"\n工具 {t_name} 回傳：{str(res)[:500]}\n請繼續你的調查或給出總結。"
+                                continue # Next turn
+                except: pass
+            
+            # No more tool calls or max turns reached
+            break
 
         if not tool_results:
-            return "未進行工具調用或調用失敗。"
+            return "未進行有效工具調用或調用失敗，缺乏具體證據。"
             
-        # [Lifecycle 3] Create Checkpoint & Handoff
-        checkpoint = lc.create_checkpoint(
-            step_name="background_investigation",
-            context={"topic": topic, "summary_pending": True},
-            next_actions={"suggested": "generate_summary"}
-        )
-        self._publish_log(debate_id, f"💾 建立調查快照 (Checkpoint ID: {checkpoint.id})")
-
         # Summarize findings
         summary_prompt = f"""
-基於以下已驗證的調查證據，請總結關於「{topic}」的背景事實（公司代碼、業務等）：
+基於以下【已驗證】的調查證據，請撰寫關於「{topic}」的背景事實報告：
 
 {chr(10).join(tool_results)}
 
-注意：僅依據標註為 (Verified) 的內容進行事實陳述。
+要求：
+1. 必須包含具體的宏觀指標 (CPI, 匯率) 或產業鏈資訊。
+2. 僅描述證據中存在的數據，不准推測。
 """
-        summary = await call_llm_async(summary_prompt, system_prompt="你是辯論主席。請基於證據進行報告。", context_tag=f"{debate_id}:Chairman:InvestigateSummary")
-        self._publish_log(debate_id, f"📋 背景調查總結：{summary[:100]}...")
+        summary = await call_llm_async(summary_prompt, system_prompt="你是誠實的報告員。", context_tag=f"{debate_id}:Chairman:InvestigateSummary")
+        self._publish_log(debate_id, f"📋 背景調查總結已生成 (含宏觀/產業鏈數據)。")
         return summary
 
     async def _extract_entities_from_query(self, topic: str, debate_id: str = None) -> Dict[str, Any]:
