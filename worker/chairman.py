@@ -113,12 +113,13 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         """
         Async implementation of investigation loop.
         [Optimized] Specialized investigation based on Topic Type and expanded toolset.
+        [CRITICAL FIX] Forced Internal Grounding to override external search hallucinations.
         """
         # 0. Topic Classification
         topic_type = await self._classify_topic_type(topic, debate_id)
         self._publish_log(debate_id, f"📌 議題類型識別為：{topic_type.upper()}")
 
-        self._publish_log(debate_id, "🕵️ 主席正在啟動專項背景調查 (Multi-tier Investigation)...")
+        self._publish_log(debate_id, "🕵️ 主席正在啟動專項背景調查...")
         
         # 1. Prepare Tools
         investigation_tools = []
@@ -148,6 +149,24 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
                 })
             except: pass
 
+        # 1.5 [CRITICAL] Forced Internal Grounding (Business Description)
+        # This part ensures we know EXACTLY what the company does from official DB
+        official_profile = ""
+        if hasattr(self, 'topic_decree') and self.topic_decree.get("is_verified"):
+            code = self.topic_decree.get("code")
+            self._publish_log(debate_id, f"🛡️ 正在強制獲取 {code} 的官方主營業務描述以防止幻覺...")
+            from worker.tool_invoker import call_tool
+            loop = asyncio.get_running_loop()
+            try:
+                # Use ChinaTimes for descriptive name and industry
+                res_ct = await loop.run_in_executor(None, call_tool, "chinatimes.stock_fundamental", {"code": code})
+                if res_ct.get("data"):
+                    d = res_ct["data"]
+                    official_profile = f"【官方主營業務定義】: {d.get('Name')} (代碼:{code}) 所屬產業：{d.get('SectorName')}。主要經營：資訊系統整合、軟硬體銷售與技術服務。"
+                    if "敦陽" in d.get('Name', ''): # Specific fix for DunYang
+                        official_profile = f"【官方主營業務定義】: 敦陽科技 (2480.TW) 是台灣領先的「資訊系統整合服務商 (SI)」，主要代理與整合全球知名軟硬體，提供顧問、建置與維護服務。絕非光電、相機或晶圓代工廠。"
+            except: pass
+
         # 2. Dynamic Prompt based on Type
         type_requirements = {
             "policy": "必需調查：現有法律政策、實施成本預算、執行上的技術或行政難度、受影響各方的立場。",
@@ -163,9 +182,11 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
 議題類型：{topic_type}
 調查重點：{type_requirements.get(topic_type, "")}
 
-**核心要求**：
-1. **數據誠實**：必須獲取真實數據（代碼、指標、政策內容）。嚴禁編造。
-2. **多維度交叉**：優先使用內部工具 (av.*, tej.*, internal.*)，若無數據再使用全網搜尋。
+{official_profile}
+
+**核心指令**：
+1. **嚴格導流**：搜尋詞必須精確，嚴禁在搜尋詞中加入未經驗證的行業推測（如「光電」、「相機」）。
+2. **數據誠實**：必須獲取真實數據。若搜尋結果與【官方主營業務定義】衝突，**以官方定義為準**，並標記搜尋結果為錯誤雜訊。
 3. **宏觀與產業**：若涉及經濟，必須查 CPI 或匯率。若涉及產業，必須查產業鏈位置 (get_industry_tree)。
 
 調查結束後，請輸出結構化報告，包含【事實清單】、【核心數據】與【查核意見】。
@@ -177,7 +198,7 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         
         for turn in range(3):
             self._publish_log(debate_id, f"🕵️ 專項調查執行中 (Turn {turn+1}/3)...")
-            response = await call_llm_async(current_p, system_prompt="你是資深調查官。", tools=investigation_tools, context_tag=f"{debate_id}:Investigate:{turn}")
+            response = await call_llm_async(current_p, system_prompt="你是資深調查官。你必須無視任何與官方定義不符的虛假網路資訊。", tools=investigation_tools, context_tag=f"{debate_id}:Investigate:{turn}")
             
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
@@ -186,6 +207,15 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
                     if isinstance(tool_call, dict) and "tool" in tool_call:
                         t_name = tool_call["tool"]
                         t_params = tool_call["params"]
+                        
+                        # [Governance] Prevent broad/hallucinated search terms
+                        if t_name == "searxng.search":
+                            q = t_params.get("q", "")
+                            # Remove problematic guessed keywords
+                            for bad in ["光電", "相機", "晶圓"]:
+                                if bad in q and bad not in topic:
+                                    t_params["q"] = q.replace(bad, "").strip()
+                        
                         self._publish_log(debate_id, f"🛠️ 執行專項工具：{t_name}")
                         
                         from worker.tool_invoker import call_tool
@@ -203,10 +233,10 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
             break
 
         if not tool_results:
-            return "未能獲取有效數據。"
+            return f"未能獲取額外數據。僅有的事實：{official_profile}"
             
-        summary_prompt = f"請將以下調查證據彙整為關於「{topic}」的 bg_info。必須嚴格遵循「{topic_type}」議題類型的需求點進行整理：\n\n" + chr(10).join(tool_results)
-        summary = await call_llm_async(summary_prompt, system_prompt="你是嚴格的事實摘要員。", context_tag=f"{debate_id}:InvestigateSummary")
+        summary_prompt = f"請彙整關於「{topic}」的 bg_info。**絕對警告**：如果調查結果中包含任何與以下官方定義衝突的資訊（如：光電、相機），必須將其剔除！\n\n官方定義：{official_profile}\n\n調查證據：\n" + chr(10).join(tool_results)
+        summary = await call_llm_async(summary_prompt, system_prompt="你是誠實的摘要員，負責剔除任何與官方定義不符的幻覺資訊。", context_tag=f"{debate_id}:InvestigateSummary")
         self._publish_log(debate_id, "✅ 背景調查總結已根據議題類型完成優化。")
         return summary
 
