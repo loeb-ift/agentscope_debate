@@ -168,6 +168,10 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         self.topic_decree = await self._validate_and_correction_decree({"subject": subject, "code": entities.get("code") or "Unknown"}, debate_id)
         bg_info = await self._investigate_topic_async(topic, debate_id)
 
+        # [Phase 29] Explicit Knowledge Gap Handling
+        if "未能獲取數據" in bg_info or not bg_info.strip():
+            bg_info = f"【⚠️ 數據斷層標註】：目前無法獲取關於「{subject}」的具體財務或行業數據。請 Agent 基於邏輯推演，並明確標註任何未經證實的假設。"
+
         db = SessionLocal()
         try:
             template = PromptService.get_prompt(db, "chairman.pre_debate_analysis") or "分析：{{topic}}"
@@ -175,14 +179,25 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         finally: db.close()
             
         analysis_result = {}
-        for attempt in range(2):
+        # [Phase 29] Robust Parse & Self-Correction Turn
+        for attempt in range(3):
+            self._publish_log(debate_id, f"🚀 正在產出戰略分析 (嘗試 {attempt+1}/3)...")
             response = await call_llm_async(f"分析：{topic}\n背景：{bg_info}", system_prompt=system_p, context_tag=f"{debate_id}:PreAnalysis")
             try:
                 json_match = re.search(r'\{.*\}', response, re.DOTALL)
                 if json_match:
                     parsed = json.loads(json_match.group(0), strict=False)
-                    if "tool" not in parsed: analysis_result = parsed; break
-            except: pass
+                    # Check for required keys (Parse Integrity)
+                    if all(k in parsed for k in ["step1_type_classification", "step6_handcard"]):
+                        analysis_result = parsed
+                        break
+                    else:
+                        system_p += "\n\n⚠️ 錯誤：之前的 JSON 缺少必要欄位。請務必包含 step1_type_classification 與 step6_handcard。"
+            except Exception as e:
+                system_p += f"\n\n⚠️ JSON 解析失敗：{str(e)}。請重新輸出標準 JSON 格式。"
+
+        if not analysis_result:
+            analysis_result = {"step5_summary": "分析生成失敗，請基於背景事實進行即興辯論。"}
 
         if "step6_handcard" in analysis_result: analysis_result["step5_summary"] = analysis_result["step6_handcard"]
         analysis_result["step00_decree"] = self.topic_decree

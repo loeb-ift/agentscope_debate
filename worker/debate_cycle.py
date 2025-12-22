@@ -1822,51 +1822,43 @@ class DebateCycle:
                             
                             if cached_result:
                                 tool_result = cached_result['result']
-                                
                                 # [Memory Opt] Mark as Adopted since we are using it
                                 await self.hippocampus.mark_adopted(tool_name, params)
-                                
-                                # Create a preview string for debugging
-                                try:
-                                    result_str = json.dumps(tool_result, ensure_ascii=False)
-                                except:
-                                    result_str = str(tool_result)
-                                # Show FULL content for debugging as requested
-                                self._publish_log(f"{agent.name} (Memory)", f"🧠 從海馬迴短期記憶中獲取了結果 (Access: {cached_result['access_count']}) 『{result_str}』")
+                                self._publish_log(f"{agent.name} (Memory)", f"🧠 從海馬迴短期記憶中獲取了結果 (Access: {cached_result['access_count']})")
                             else:
-                                # 2. Execute Tool (Sensory Input)
+                                # 2. Execute Tool (Sensory Input) with Retry logic [Phase 29]
                                 from worker.tool_invoker import call_tool
                                 loop = asyncio.get_running_loop()
                                 
-                                # [Observability] Track Latency & Cost
-                                start_tool = datetime.now()
-                                tool_result = await loop.run_in_executor(None, call_tool, tool_name, params)
+                                tool_result = None
+                                for tool_retry in range(2): # 1 initial + 1 retry
+                                    try:
+                                        start_tool = datetime.now()
+                                        tool_result = await loop.run_in_executor(None, call_tool, tool_name, params)
+                                        # Check if result is error or empty
+                                        if isinstance(tool_result, dict) and tool_result.get("error"):
+                                            raise ValueError(tool_result["error"])
+                                        break # Success
+                                    except Exception as te:
+                                        if tool_retry == 0:
+                                            self._publish_log("System", f"🔄 工具 {tool_name} 失敗，正在自動重試...")
+                                            time.sleep(1)
+                                        else:
+                                            # Final failure: Try Compensation logic
+                                            self._publish_log("System", f"⚠️ 工具 {tool_name} 完全失敗，嘗試搜尋補償...")
+                                            if "search" not in tool_name:
+                                                comp_q = f"{getattr(self, 'topic_decree', {}).get('subject')} {tool_name}數據"
+                                                tool_result = await loop.run_in_executor(None, call_tool, "searxng.search", {"q": comp_q})
+                                            else:
+                                                tool_result = {"error": str(te)}
+
                                 tool_duration = (datetime.now() - start_tool).total_seconds()
-                                
                                 self.tool_stats["count"] += 1
                                 self.tool_stats["total_time"] += tool_duration
                                 
-                                # Simple Cost Model
-                                cost = 0.0
-                                if tool_name.startswith("tej.") and Config.ENABLE_TEJ_TOOLS: cost = 0.03 # $0.03 per TEJ call
-                                elif tool_name.startswith("financial."): cost = 0.01 # Auditor
-                                
-                                # Google Search Cost Logic
-                                if "search" in tool_name or "google" in tool_name:
-                                    # Increment search count in Redis
-                                    search_key = f"debate:{self.debate_id}:usage"
-                                    self.redis_client.hincrby(search_key, "search_count", 1)
-                                    
-                                    # Cost calculation (Simplified: assume > 2M calls globally or just track usage)
-                                    # $3 per 1M = $0.000003 per call
-                                    # For this debate, we track estimated cost
-                                    cost = 0.000003
-                                
-                                self.tool_stats["estimated_cost"] += cost
-                                
                                 # 3. Store in Working Memory
                                 await self.hippocampus.store(agent.name, tool_name, params, tool_result)
-                                self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬迴。")
+                                self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行完成。")
 
                                 # [Phase 24] Search Alignment Check
                                 # If tool is search, verify against Chairman's Decree
