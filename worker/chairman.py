@@ -426,7 +426,10 @@ JSON 必須包含以下欄位：
              print(f"Analysis verification failed: {e}")
 
         print(f"Pre-debate analysis completed.")
-        return analysis_result
+        return {
+            "analysis": analysis_result,
+            "bg_info": bg_info
+        }
 
     async def _verify_analysis_integrity(self, analysis: Dict[str, Any], bg_info: str, debate_id: str = None) -> Dict[str, Any]:
         """

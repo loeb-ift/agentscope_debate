@@ -385,7 +385,9 @@ class DebateCycle:
         self._publish_progress(10, "主席正在進行賽前分析...", "analysis")
         
         # Chairman analysis is now fully async
-        self.analysis_result = await self.chairman.pre_debate_analysis(self.topic, debate_id=self.debate_id)
+        analysis_packet = await self.chairman.pre_debate_analysis(self.topic, debate_id=self.debate_id)
+        self.analysis_result = analysis_packet.get("analysis", {})
+        self.bg_info = analysis_packet.get("bg_info", "")
         
         # [Topic Locking] Store Decree in Hippocampus
         decree = self.analysis_result.get("step00_decree", {})
@@ -1520,6 +1522,7 @@ class DebateCycle:
                 round_num=round_num,
                 history_text=history_text,
                 chairman_summary=self.analysis_result.get('step5_summary', '無'),
+                background_facts=getattr(self, 'bg_info', '尚未蒐集到具體背景數據。'),
                 current_date=f"{CURRENT_DATE} {db_date_info}",
                 stock_codes=chr(10).join([f"- {name}: {code}" for name, code in STOCK_CODES.items()]),
                 tools_desc=tools_desc + browser_info,
