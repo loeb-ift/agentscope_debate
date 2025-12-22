@@ -2087,8 +2087,15 @@ def main():
                 refresh_replays_btn.click(update_replay_list, outputs=replay_file_dropdown)
                 
                 def on_load_replay(filename=None):
-                    if not filename or filename == []:
+                    if not filename or filename == [] or filename == "":
                         return "請選擇一個報告文件以檢視內容。", None
+                    
+                    # Ensure filename is a string if it's a single selection
+                    if isinstance(filename, list) and len(filename) > 0:
+                        filename = filename[0]
+                    elif isinstance(filename, list):
+                        return "請選擇一個報告文件。", None
+
                     content = get_replay_markdown(filename)
                     if not content or content == "Error loading replay.":
                         return "無法讀取報告。", None
