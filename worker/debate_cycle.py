@@ -123,6 +123,10 @@ class DebateCycle:
             f.write(f"# 辯論報告：{self.topic}\n\n## 最終結論\n{conclusion}\n\n## 評審團報告\n{jury_report}\n")
         print(f"Report saved to {filepath}")
 
+    def start(self) -> Dict[str, Any]:
+        """同步包裝器，供 Celery 任務調用。"""
+        return asyncio.run(self.start_async())
+
     async def start_async(self) -> Dict[str, Any]:
         start_time = datetime.now(); self._publish_log("System", f"Debate '{self.debate_id}' started.")
         await self._check_db_date_async()
