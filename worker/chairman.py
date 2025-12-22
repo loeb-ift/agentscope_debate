@@ -177,10 +177,21 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
             "priority": "必需調查：各方案的機會成本、邊際收益對比、歷史上的權衡經驗、資源缺口評估。"
         }
 
+        # [Phase 27] Supply-Chain Aware Macro Guidance
+        macro_guidance = """
+        【產業鏈聯動調查指引】：
+        1. 首先調用 `internal.get_industry_tree` 識別主體在產業鏈中的角色。
+        2. 若主體為【下游/系統整合(SI)】：重點調查【匯率】（進口成本）與【同業競爭情況】。
+        3. 若主體為【中游/製造】：重點調查【通膨/原材料價格】與【產能利用率】。
+        4. 若主體為【上游/設計】：重點調查【研發投入】與【終端市場需求】。
+        """
+
         prompt = f"""
 請對辯題「{topic}」進行專項調查。
 議題類型：{topic_type}
 調查重點：{type_requirements.get(topic_type, "")}
+
+{macro_guidance}
 
 {official_profile}
 
