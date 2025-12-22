@@ -1824,6 +1824,25 @@ class DebateCycle:
                                 await self.hippocampus.store(agent.name, tool_name, params, tool_result)
                                 self._publish_log(f"{agent.name} (Tool)", f"工具 {tool_name} 執行成功並存入海馬迴。")
 
+                                # [Phase 24] Search Alignment Check
+                                # If tool is search, verify against Chairman's Decree
+                                if "search" in tool_name:
+                                    self._publish_log("System", f"🔍 正在稽核搜尋結果與題目鎖定 ({getattr(self, 'topic_decree', {}).get('subject')}) 的相關性...")
+                                    audit_prompt = f"""
+                                    請稽核以下搜尋結果是否與討論主體「{getattr(self, 'topic_decree', {}).get('subject')}」及官方定義高度相關。
+                                    
+                                    官方定義：{getattr(self, 'bg_info', 'SI 系統整合商')}
+                                    搜尋結果：{str(tool_result)[:1000]}
+                                    
+                                    要求：
+                                    1. 如果結果中包含明顯衝突的行業資訊（如：官方說是 SI，結果說是光電），請將該結果標記為「無關雜訊」。
+                                    2. 只輸出過濾後的高度相關內容摘要。
+                                    """
+                                    try:
+                                        tool_result = await call_llm_async(audit_prompt, system_prompt="你是事實校驗員，負責剔除無關搜尋雜訊。")
+                                        self._publish_log("System", "✅ 搜尋結果已通過對齊校驗並過濾雜訊。")
+                                    except: pass
+
                                 # [Governance] Track discovered URLs for search tools
                                 if "search" in tool_name or "fetch" in tool_name:
                                     found_urls = self._extract_urls(tool_result)
