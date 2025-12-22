@@ -535,7 +535,7 @@ class HippocampalMemory:
     async def search_shared_memory(self, query: str, limit: int = 5, filter_tool: str = None, filter_coid: str = None) -> str:
         """
         語義檢索共享記憶。同時檢索「場次特定」與「全局宏觀」兩個 Tier。
-        加入 [Phase 26] Strict Metadata Filter 防止跨公司污染。
+        [Robustness Update]: Handle missing collections gracefully (404).
         """
         from api.config import Config
         
@@ -543,25 +543,39 @@ class HippocampalMemory:
         if filter_tool:
             filters["tool"] = filter_tool
         if filter_coid:
-            # 強制過濾特定公司代碼，防止台積電數據混入敦陽辯論
             filters["coid"] = filter_coid
             
         # 1. Search Local Debate Memory
-        local_results = await VectorStore.search(
-            collection_name=self.ltm_collection,
-            query=query,
-            limit=limit,
-            filter_conditions=filters
-        )
+        try:
+            local_results = await VectorStore.search(
+                collection_name=self.ltm_collection,
+                query=query,
+                limit=limit,
+                filter_conditions=filters
+            )
+        except Exception as e:
+            # If collection 404, treat as empty instead of crashing
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.info(f"Hippocampus: Local collection {self.ltm_collection} not yet created. Skipping.")
+                local_results = []
+            else:
+                logger.warning(f"Hippocampus: Local search error: {e}")
+                local_results = []
         
         # 2. Search Global Macro Memory (Cross-debate)
-        # Macro 數據通常不帶 coid，所以不套用 filter_coid 以便共享
-        global_results = await VectorStore.search(
-            collection_name=self.global_ltm_collection,
-            query=query,
-            limit=limit,
-            filter_conditions={k: v for k, v in filters.items() if k != "coid"}
-        )
+        try:
+            global_results = await VectorStore.search(
+                collection_name=self.global_ltm_collection,
+                query=query,
+                limit=limit,
+                filter_conditions={k: v for k, v in filters.items() if k != "coid"}
+            )
+        except Exception as e:
+            if "404" in str(e) or "not found" in str(e).lower():
+                global_results = []
+            else:
+                logger.warning(f"Hippocampus: Global search error: {e}")
+                global_results = []
         
         results = local_results + global_results
         

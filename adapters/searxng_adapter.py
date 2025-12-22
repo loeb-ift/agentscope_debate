@@ -64,14 +64,14 @@ class SearXNGAdapter(ToolAdapter):
                 },
                 "justification": {
                     "type": "string",
-                    "description": "[必填] 為什麼你需要進行此搜尋？請說明此 Query 與辯題及主席鎖定實體（Decree）的邏輯關聯性。"
+                    "description": "[建議提供] 為什麼你需要進行此搜尋？請說明此 Query 與辯題及主席鎖定實體（Decree）的邏輯關聯性。"
                 },
                 "expected_insight": {
                     "type": "string",
-                    "description": "[必填] 你預期從搜尋結果中獲得什麼具體事實或數據？"
+                    "description": "[建議提供] 你預期從搜尋結果中獲得什麼具體事實或數據？"
                 }
             },
-            "required": ["q", "justification", "expected_insight"]
+            "required": ["q"]
         }
 
     def describe(self) -> Dict[str, Any]:
