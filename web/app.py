@@ -693,8 +693,6 @@ def delete_toolset(toolset_id):
     except Exception as e:
         return f"刪除失敗: {e}"
 
-
-
 def get_toolset_choices():
     data = _get_cached_or_fetch("toolsets", f"{API_URL}/toolsets")
     if not data:
@@ -895,7 +893,7 @@ def main():
             # ==============================
             # Tab 1: 🏛️ 辯論大廳 (Debate Hall)
             # ==============================
-            with gr.TabItem("🏛️ 辯論大廳"):
+            with gr.TabItem("🏛️ 辯論大廳") as debate_hall_tab:
                 with gr.Tabs():
                     # Sub-tab 1.1: 發起辯論
                     with gr.TabItem("⚔️ 發起辯論"):
@@ -1115,7 +1113,7 @@ def main():
 
                     
                     # Sub-tab 1.2: Agent 管理
-                    with gr.TabItem("👥 Agent 管理"):
+                    with gr.TabItem("👥 Agent 管理") as agent_mgmt_tab:
                         agent_id_state = gr.State(value=None) # Store ID for edit mode
 
                         with gr.Tabs() as agent_tabs:
@@ -1246,8 +1244,10 @@ def main():
                         refresh_agents_btn.click(format_agent_list, outputs=agents_table)
                         refresh_agent_select_btn.click(update_agent_dropdown, outputs=selected_agent_id_input)
                         
-                        # Auto-refresh dropdown on tab load
-                        agent_list_tab.select(update_agent_dropdown, outputs=selected_agent_id_input)
+                        # Optimization: Tab-based selective loading
+                        agent_mgmt_tab.select(format_agent_list, outputs=agents_table)
+                        agent_mgmt_tab.select(update_agent_dropdown, outputs=selected_agent_id_input)
+                        agent_mgmt_tab.select(update_agent_toolset_choices, outputs=agent_toolsets)
 
                         load_agent_btn.click(
                             load_agent_to_edit,
@@ -1272,13 +1272,12 @@ def main():
                             outputs=[agent_op_msg]
                         ).success(format_agent_list, outputs=agents_table).success(update_agent_dropdown, outputs=selected_agent_id_input)
 
-                        # Optimization: Tab-based selective loading
-                        agent_list_tab.select(format_agent_list, outputs=agents_table)
+                        # Init
                         selected_agent_id_input.focus(update_agent_dropdown, outputs=selected_agent_id_input)
                         agent_toolsets.focus(update_agent_toolset_choices, outputs=agent_toolsets)
 
                     # Sub-tab 1.3: 團隊管理
-                    with gr.TabItem("👥 團隊管理"):
+                    with gr.TabItem("👥 團隊管理") as team_mgmt_tab:
                         team_id_state = gr.State(value=None) # Store ID for edit mode
                         
                         with gr.Tabs() as team_tabs:
@@ -1419,8 +1418,10 @@ def main():
                                 refresh_teams_btn.click(list_teams, outputs=teams_table)
                                 refresh_team_select_btn.click(update_team_dropdown, outputs=selected_team_id)
                                 
-                                # Auto-refresh
-                                team_list_tab.select(update_team_dropdown, outputs=selected_team_id)
+                                # Optimization: Refresh on tab selection
+                                team_mgmt_tab.select(list_teams, outputs=teams_table)
+                                team_mgmt_tab.select(update_team_dropdown, outputs=selected_team_id)
+                                team_mgmt_tab.select(update_member_dropdown, outputs=team_members)
                                 
                                 # Validation Hook
                                 team_members.change(check_team_balance, inputs=[team_members], outputs=[team_validation_msg])
@@ -1449,7 +1450,6 @@ def main():
                                 ).then(list_teams, outputs=teams_table)
 
                                 # Init
-                                team_list_tab.select(list_teams, outputs=teams_table)
                                 selected_team_id.focus(update_team_dropdown, outputs=selected_team_id)
                                 team_members.focus(update_member_dropdown, outputs=team_members)
 
@@ -1457,10 +1457,10 @@ def main():
             # ==============================
             # Tab 2: 🛠️ 工具庫 (Tool Library)
             # ==============================
-            with gr.TabItem("🛠️ 工具庫"):
+            with gr.TabItem("🛠️ 工具庫") as tool_library_tab:
                 with gr.Tabs():
                     # Sub-tab 2.1: 工具清單
-                    with gr.TabItem("🧰 工具清單"):
+                    with gr.TabItem("🧰 工具清單") as tool_list_subtab:
                         gr.Markdown("### 可用工具一覽")
                         def get_tools_df():
                             try:
@@ -1487,10 +1487,11 @@ def main():
                         tools_df = gr.DataFrame()
                         refresh_tools_btn = gr.Button("刷新工具")
                         refresh_tools_btn.click(get_tools_df, outputs=tools_df)
-                        demo.load(get_tools_df, outputs=tools_df)
+                        # Standardized tab select loading
+                        tool_list_subtab.select(get_tools_df, outputs=tools_df)
                     
                     # Sub-tab 2.2: 編輯/管理工具
-                    with gr.TabItem("✏️ 編輯/管理工具", id="tool_edit_tab"):
+                    with gr.TabItem("✏️ 編輯/管理工具", id="tool_edit_tab") as tool_mgmt_subtab:
                         tool_id_state = gr.State(value=None)
                         
                         with gr.Row():
@@ -1549,7 +1550,8 @@ def main():
                                 return (None, "Error", "api", "basic", str(e), "{}", "{}", "{}", "", True)
 
                         refresh_tool_select_btn.click(update_tool_dropdown, outputs=select_tool_dropdown)
-                        
+                        tool_mgmt_subtab.select(update_tool_dropdown, outputs=select_tool_dropdown)
+
                         load_tool_btn.click(
                             load_tool_to_edit,
                             inputs=[select_tool_dropdown],
@@ -1571,10 +1573,10 @@ def main():
                         ).then(update_tool_dropdown, outputs=select_tool_dropdown)
 
                         # Init
-                        demo.load(update_tool_dropdown, outputs=select_tool_dropdown)
+                        select_tool_dropdown.focus(update_tool_dropdown, outputs=select_tool_dropdown)
 
                     # Sub-tab 2.3: 自定義工具註冊
-                    with gr.TabItem("🔧 自定義工具註冊"):
+                    with gr.TabItem("🔧 自定義工具註冊") as tool_reg_subtab:
                         with gr.Row():
                             with gr.Column(scale=1):
                                 gr.Markdown("### 新增自定義工具")
@@ -1748,11 +1750,11 @@ def main():
                         ).then(list_custom_tools, outputs=custom_tools_table)
                         
                         refresh_custom_tools_btn.click(list_custom_tools, outputs=custom_tools_table, show_progress=True)
-                        # DataFrame has no .focus(), use select on parent tab or manual refresh
-                        demo.load(list_custom_tools, outputs=custom_tools_table) # Revert to load for simple tables if no parent tab select available
+                        # Optimization: Refresh on tab selection
+                        tool_reg_subtab.select(list_custom_tools, outputs=custom_tools_table)
                     
                     # Sub-tab 2.3: 工具集管理
-                    with gr.TabItem("📦 工具集管理"):
+                    with gr.TabItem("📦 工具集管理") as toolset_mgmt_tab:
                         gr.Markdown("### 管理工具集 (ToolSets)")
                         with gr.Tabs():
                             with gr.TabItem("📋 工具集列表"):
@@ -1790,6 +1792,11 @@ def main():
                                 refresh_toolsets_btn.click(list_toolsets, outputs=toolsets_table)
                                 refresh_ts_select_btn.click(update_toolset_dropdown, outputs=selected_toolset_id)
                                 
+                                # Optimization: Refresh on tab selection
+                                toolset_mgmt_tab.select(list_toolsets, outputs=toolsets_table)
+                                toolset_mgmt_tab.select(refresh_tool_choices, outputs=ts_tools)
+                                toolset_mgmt_tab.select(update_toolset_dropdown, outputs=selected_toolset_id)
+
                                 delete_toolset_btn.click(
                                     delete_toolset,
                                     inputs=[selected_toolset_id],
@@ -1803,14 +1810,12 @@ def main():
                                 ).then(list_toolsets, outputs=toolsets_table)
                                 
                                 # Init
-                                # toolsets_table.focus(list_toolsets, outputs=toolsets_table)
-                                demo.load(list_toolsets, outputs=toolsets_table)
                                 ts_tools.focus(refresh_tool_choices, outputs=ts_tools)
                                 selected_toolset_id.focus(update_toolset_dropdown, outputs=selected_toolset_id)
 
 
                     # Sub-tab 2.4: 產業數據管理 (Renamed from Entities)
-                    with gr.TabItem("🏦 產業數據管理 (Industry Data)"):
+                    with gr.TabItem("🏦 產業數據管理 (Industry Data)") as industry_data_tab:
                         gr.Markdown("""
                         管理辯手可使用的內部實體數據（如公司、證券、術語、產業關係）。這些數據通過 `internal.*` 工具暴露給辯手。
                         """)
@@ -1829,14 +1834,14 @@ def main():
                                 msg += "\n\n✅ 資料尚新。"
                             return msg
 
-                        demo.load(check_update_status, outputs=update_status_md)
+                        industry_data_tab.select(check_update_status, outputs=update_status_md)
                         update_btn.click(trigger_company_update, outputs=None).then(
                             lambda: "🔄 更新中... 請稍後刷新頁面查看時間。", outputs=update_status_md
                         )
 
                         with gr.Tabs():
                             # 1. 產業地圖 (Moved from Tab 3)
-                            with gr.TabItem("🗺️ 產業地圖"):
+                            with gr.TabItem("🗺️ 產業地圖") as industry_map_subtab:
                                 with gr.Row():
                                     sector_select = gr.Dropdown(label="選擇產業 (Sector)", choices=[], allow_custom_value=True)
                                     refresh_tree_btn = gr.Button("🔄 刷新地圖")
@@ -1859,13 +1864,14 @@ def main():
                                 )
                                 sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
                                 
+                                # Optimization: Refresh on tab selection
+                                industry_map_subtab.select(update_sector_choices, outputs=sector_select)
+                                
                                 # Init choices
-                                demo.load(update_sector_choices, outputs=sector_select).then(
-                                    load_tree, inputs=[sector_select], outputs=tree_view
-                                )
+                                sector_select.focus(update_sector_choices, outputs=sector_select)
 
                             # 2. 公司管理 (Merged: Create + Filter/List)
-                            with gr.TabItem("🏢 公司管理"):
+                            with gr.TabItem("🏢 公司管理") as company_mgmt_subtab:
                                 with gr.Row():
                                     # Left: Create
                                     with gr.Column(scale=1):
@@ -1911,14 +1917,15 @@ def main():
                                     outputs=companies_table
                                 )
                                 
+                                # Optimization: Refresh on tab selection
+                                company_mgmt_subtab.select(update_filter_choices, outputs=filter_sector)
+                                company_mgmt_subtab.select(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
+
                                 # Init
-                                # filter_sector.focus(update_filter_choices, outputs=filter_sector)
-                                # companies_table.focus(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
                                 filter_sector.focus(update_filter_choices, outputs=filter_sector)
-                                demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
 
                             # 3. 證券管理 (Existing)
-                            with gr.TabItem("📈 證券管理"):
+                            with gr.TabItem("📈 證券管理") as security_mgmt_subtab:
                                 with gr.Row():
                                     with gr.Column(scale=1):
                                         gr.Markdown("### 新增證券")
@@ -1945,10 +1952,10 @@ def main():
                                 ).then(list_securities, outputs=sec_table)
                                 
                                 refresh_sec_btn.click(list_securities, outputs=sec_table)
-                                demo.load(list_securities, outputs=sec_table)
+                                security_mgmt_subtab.select(list_securities, outputs=sec_table)
 
                             # 4. 金融術語管理 (Existing)
-                            with gr.TabItem("📚 金融術語管理"):
+                            with gr.TabItem("📚 金融術語管理") as term_mgmt_subtab:
                                 gr.Markdown("### 編輯金融術語 (Balance Sheet, Income Statement, Cash Flow)")
                                 with gr.Row():
                                     with gr.Column(scale=2):
@@ -1988,6 +1995,10 @@ def main():
                                 refresh_terms_btn.click(list_financial_terms, outputs=terms_table)
                                 refresh_term_select_btn.click(update_term_dropdown, outputs=edit_term_id)
                                 
+                                # Optimization: Refresh on tab selection
+                                term_mgmt_subtab.select(list_financial_terms, outputs=terms_table)
+                                term_mgmt_subtab.select(update_term_dropdown, outputs=edit_term_id)
+
                                 edit_term_id.change(
                                     load_term_details,
                                     inputs=[edit_term_id],
@@ -2000,15 +2011,12 @@ def main():
                                     outputs=[term_op_msg]
                                 ).then(list_financial_terms, outputs=terms_table)
                                 
-                                # Init
-                                # terms_table.focus(list_financial_terms, outputs=terms_table)
-                                demo.load(list_financial_terms, outputs=terms_table)
                                 edit_term_id.focus(update_term_dropdown, outputs=edit_term_id)
 
             # ==============================
             # Tab 4: 📝 提示詞控制台 (Prompt Console)
             # ==============================
-            with gr.TabItem("📝 提示詞控制台"):
+            with gr.TabItem("📝 提示詞控制台") as prompt_console_tab:
                 with gr.Row():
                     with gr.Column(scale=1):
                         gr.Markdown("### 編輯提示詞")
@@ -2034,6 +2042,10 @@ def main():
                     return gr.update(choices=get_all_prompt_keys())
 
                 refresh_prompt_select_btn.click(update_prompt_dropdown, outputs=prompt_key_dropdown)
+                
+                # Optimization: Refresh on tab selection
+                prompt_console_tab.select(list_prompts, outputs=prompts_table)
+                prompt_console_tab.select(update_prompt_dropdown, outputs=prompt_key_dropdown)
 
                 prompt_key_dropdown.change(
                     get_prompt_content,
@@ -2048,13 +2060,12 @@ def main():
                 ).then(list_prompts, outputs=prompts_table)
                 
                 refresh_prompts_btn.click(list_prompts, outputs=prompts_table)
-                demo.load(list_prompts, outputs=prompts_table)
-                demo.load(update_prompt_dropdown, outputs=prompt_key_dropdown)
+                prompt_key_dropdown.focus(update_prompt_dropdown, outputs=prompt_key_dropdown)
             
             # ==============================
             # Tab 5: 📜 歷史復盤 (History Replay)
             # ==============================
-            with gr.TabItem("📜 歷史復盤"):
+            with gr.TabItem("📜 歷史復盤") as history_replay_tab:
                 with gr.Row():
                     with gr.Column(scale=1):
                         gr.Markdown("### 選擇歷史辯論")
@@ -2099,13 +2110,15 @@ def main():
                 )
                 
                 # Init list
+                # Optimization: Trigger loading when tab is selected AND when dropdown is focused
+                history_replay_tab.select(update_replay_list, outputs=replay_file_dropdown)
+                replay_file_dropdown.focus(update_replay_list, outputs=replay_file_dropdown)
                 demo.load(lambda: gr.update(choices=[]), outputs=replay_file_dropdown) # Clear first
-                replay_file_dropdown.focus(update_replay_list, outputs=replay_file_dropdown) # Reload on focus/click
             
             # ==============================
             # Tab 6: ⚙️ 系統設置 (Settings)
             # ==============================
-            with gr.TabItem("⚙️ 系統設置"):
+            with gr.TabItem("⚙️ 系統設置") as sys_settings_tab:
                 gr.Markdown("### 系統環境變數設置 (.env)")
                 gr.Markdown("*直接編輯表格中的「數值 (Value)」欄位，然後點擊保存。*")
                 
@@ -2116,7 +2129,7 @@ def main():
                 sys_config_df = gr.DataFrame(
                     headers=["配置項 (Key)", "數值 (Value)", "說明 (Description)"],
                     datatype=["str", "str", "str"],
-                    col_count=(3, "fixed"),
+                    column_count=(3, "fixed"),
                     interactive=True,
                     wrap=True
                 )
@@ -2168,6 +2181,8 @@ def main():
                         return f"保存失敗: {e}"
 
                 refresh_config_btn.click(load_config_data, outputs=sys_config_df)
+                # Optimization: Refresh on tab selection
+                sys_settings_tab.select(load_config_data, outputs=sys_config_df)
                 
                 save_config_btn.click(
                     save_config_data,
@@ -2175,8 +2190,7 @@ def main():
                     outputs=[config_msg]
                 ).then(load_config_data, outputs=sys_config_df)
                 
-                # Init
-                demo.load(load_config_data, outputs=sys_config_df)
+                # No demo.load for config to speed up initial UI ready state
 
     return demo
 

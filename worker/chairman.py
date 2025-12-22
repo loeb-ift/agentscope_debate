@@ -821,6 +821,8 @@ JSON 必須包含以下欄位：
         """
         self._publish_log(debate_id, "🔬 主席正在進行延伸調查 (Extended Research) 以生成行動建議...")
         
+        from api.config import Config
+        
         # 1. Plan Research Questions
         plan_prompt = f"""
         基於辯題「{topic}」與初步結論「{verdict[:200]}...」，請列出 3 個具體的延伸調查問題，以便為投資者生成可執行的行動建議。
