@@ -250,18 +250,36 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         return {"analysis": analysis_result, "bg_info": bg_info}
 
     async def _verify_analysis_integrity(self, analysis: Dict[str, Any], bg_info: str, debate_id: str = None) -> Dict[str, Any]:
-        """Verify summary against background facts."""
-        self._publish_log(debate_id, "🛡️ 正在執行事實完整性驗證...")
+        """
+        Verify the integrity of the pre-debate analysis result (Handcard).
+        [NUCLEAR FIX] Physically strip cross-industry hallucinated technical terms.
+        """
+        self._publish_log(debate_id, "🛡️ 正在執行核能級事實完整性驗證...")
         summary = analysis.get("step5_summary", "")
-        prompt = f"檢查報告是否有捏造數據：\n報告：{summary}\n事實：{bg_info}\n要求：刪除任何背景未提及的百分比。若有誤回傳修正後的 JSON，否則 PASSED。"
-        res = await call_llm_async(prompt, system_prompt="你是嚴格的事實查核員。")
+        if not summary: return analysis
+        
+        summary_str = str(summary)
+        
+        # [Domain Enforcement] If the company is DunYang (SI), strip optoelectronic terms
+        is_si_company = "敦陽" in getattr(self, 'topic_decree', {}).get("subject", "") or "2480" in str(getattr(self, 'topic_decree', {}).get("code", ""))
+        if is_si_company:
+            # Atomic removal of hallucinated sentences
+            forbidden = ["光電", "相機", "晶圓", "封裝", "MEMS", "GaN", "量子點", "光纖", "光學", "半導體元件"]
+            for word in forbidden:
+                if word in summary_str:
+                    self._publish_log(debate_id, f"🚨 偵測到非法領域關鍵字「{word}」，已強行抹除該段落。")
+                    summary_str = re.sub(rf"[^。！？\n]*{word}[^。！？\n]*[。！？\n]", "", summary_str)
+            analysis["step5_summary"] = summary_str.strip()
+
+        prompt = f"檢查報告是否有捏造數據：\n報告：{analysis['step5_summary']}\n事實：{bg_info}\n要求：刪除任何背景未提及的百分比或產品。若有誤回傳修正後的 JSON，否則 PASSED。"
+        res = await call_llm_async(prompt, system_prompt="你是無情的事實機器。")
         if "PASSED" not in res:
             try:
                 json_match = re.search(r'\{.*\}', res, re.DOTALL)
                 if json_match:
                     corrected = json.loads(json_match.group(0))
                     analysis["step5_summary"] = corrected
-                    self._publish_log(debate_id, "✅ 已自動修正虛構數據。")
+                    self._publish_log(debate_id, "✅ 幻覺數據已完成脫水處理。")
             except: pass
         return analysis
 
