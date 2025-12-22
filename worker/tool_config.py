@@ -11,6 +11,7 @@ from worker.tool_manager import tool_manager
 # 重要常數
 STOCK_CODES = {
     "台積電": "2330",
+    "敦陽": "2480",
     "大盤": "Y9999",
     "加權指數": "Y9999"
 }

@@ -566,7 +566,7 @@ JSON 必須包含以下欄位：
         if not handcard:
             return analysis
             
-        handcard_str = json.dumps(handcard, ensure_ascii=False) if isinstance(handcard, dict) else str(handcard)
+        handcard_str = json.dumps(handcard, ensure_ascii=False) if isinstance(handcard, (dict, list)) else str(handcard)
         
         # Prompt Guardrail to check
         prompt = f"""
@@ -583,16 +583,34 @@ JSON 必須包含以下欄位：
         2. 是否引用了背景事實中不存在的「具體細節」？(如果是，這是幻覺)
         3. 公司代碼與名稱是否正確？
 
-        如果有問題，請輸出修正建議。如果沒問題，請輸出 "PASSED"。
-        只輸出檢查結果。
+        【強制規則】：
+        - 如果背景事實中提到「無法獲取數據」或「查無此項」，但報告中卻出現了具體的挑戰或建議（如：原材料上升、開發某市場），這屬於嚴重的幻覺。
+        - 幻覺內容必須被清除。
+
+        如果有問題，請輸出修正後的 JSON，僅包含修正後的報告內容。如果沒問題，請輸出 "PASSED"。
         """
         
-        check_result = await call_llm_async(prompt, system_prompt="你是嚴格的事實查核員。", context_tag=f"{debate_id}:Chairman:AnalysisCheck")
+        check_result = await call_llm_async(prompt, system_prompt="你是嚴格的事實查核員。若報告中包含背景事實未提及的推測，請將其刪除或標註為推測。", context_tag=f"{debate_id}:Chairman:AnalysisCheck")
         
         if "PASSED" not in check_result:
-            self._publish_log(debate_id, f"⚠️ 分析報告檢測到潛在風險：\n{check_result[:100]}...")
+            self._publish_log(debate_id, f"⚠️ 分析報告檢測到事實偏差，正在進行自動校正...")
             
-            # Append warning to handcard
+            # Try to parse corrected content
+            try:
+                json_match = re.search(r'\{.*\}', check_result, re.DOTALL)
+                if json_match:
+                    corrected_data = json.loads(json_match.group(0))
+                    # Update analysis with corrected data
+                    if isinstance(analysis.get("step6_handcard"), dict):
+                        analysis["step6_handcard"] = corrected_data
+                    else:
+                        analysis["step5_summary"] = str(corrected_data)
+                    self._publish_log(debate_id, "✅ 已自動修正分析報告中的幻覺內容。")
+                    return analysis
+            except:
+                pass
+
+            # Fallback to appending warning if JSON parse fails
             warning_note = f"\n\n[⚠️ SYSTEM WARNING]: 本分析報告部分內容可能需進一步查證。\n查核意見: {check_result}"
             
             if isinstance(analysis.get("step6_handcard"), dict):
@@ -612,6 +630,7 @@ JSON 必須包含以下欄位：
     async def _validate_and_correction_decree(self, decree: Dict[str, Any], debate_id: str = None) -> Dict[str, Any]:
         """
         Validate and correct the decree (Subject & Code) using tools.
+        [Optimized] Priority: 1. Hardcoded Mapping 2. Internal DB 3. External Search
         """
         self._publish_log(debate_id, "⚖️ 主席正在驗證題目鎖定 (Decree Validation)...")
         
@@ -621,7 +640,17 @@ JSON 必須包含以下欄位：
         
         # Helper to check validity
         def is_valid(val):
-            return val and val not in ["Unknown", "None", ""]
+            return val and val not in ["Unknown", "None", "", "null", "Unknown (Unknown)"]
+
+        # Strategy 0: Hardcoded STOCK_CODES Mapping (High Priority / Zero Latency)
+        # Check if subject matches any key in STOCK_CODES
+        for known_name, known_code in STOCK_CODES.items():
+            if known_name in str(subject):
+                final_decree["subject"] = known_name
+                final_decree["code"] = known_code if "." in str(known_code) else f"{known_code}.TW"
+                final_decree["is_verified"] = True
+                self._publish_log(debate_id, f"✅ (Memory) 識別到常用股票：{known_name} -> {final_decree['code']}")
+                return final_decree
 
         from worker.tool_invoker import call_tool
         loop = asyncio.get_running_loop()
