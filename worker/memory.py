@@ -30,7 +30,13 @@ class HippocampalMemory:
         self.debate_id = debate_id
         self.redis = get_redis_client()
         self.wm_prefix = f"memory:working:{debate_id}"
+        
+        # [Phase 23] Global Memory Tier Logic
+        # Macro tools (av.*, fred.*, worldbank.*) are stored in a GLOBAL collection
+        # Company specific tools remain in the DEBATE-specific collection
         self.ltm_collection = f"hippocampus_{debate_id}"
+        self.global_ltm_collection = "hippocampus_global_macro"
+        
         self.consolidation_threshold = 5 # Increased from 2 to 5 to prevent junk consolidation
         
         # [Optimization Phase 5] Write Buffer for Qdrant
@@ -495,19 +501,27 @@ class HippocampalMemory:
         if not self._ltm_buffer:
             return
             
-        texts = [x[0] for x in self._ltm_buffer]
-        metadatas = [x[1] for x in self._ltm_buffer]
+        # [Phase 23] Route based on tool type
+        global_items = [x for x in self._ltm_buffer if any(p in x[1].get('tool', '') for p in ['av.', 'fred.', 'worldbank.'])]
+        local_items = [x for x in self._ltm_buffer if x not in global_items]
         
-        try:
-            await VectorStore.add_texts(
-                collection_name=self.ltm_collection,
-                texts=texts,
-                metadatas=metadatas
-            )
-            self.stats["ltm_writes"] += len(texts)
-            logger.info(f"Hippocampus flushed {len(texts)} items to LTM.")
-        except Exception as e:
-            logger.error(f"Failed to flush Hippocampus LTM buffer: {e}")
+        async def _add_to_vstore(collection, items):
+            if not items: return
+            texts = [x[0] for x in items]
+            metadatas = [x[1] for x in items]
+            try:
+                await VectorStore.add_texts(
+                    collection_name=collection,
+                    texts=texts,
+                    metadatas=metadatas
+                )
+                self.stats["ltm_writes"] += len(texts)
+                logger.info(f"Hippocampus flushed {len(texts)} items to {collection}.")
+            except Exception as e:
+                logger.error(f"Failed to flush Hippocampus buffer to {collection}: {e}")
+
+        await _add_to_vstore(self.global_ltm_collection, global_items)
+        await _add_to_vstore(self.ltm_collection, local_items)
             
         self._ltm_buffer.clear()
 
@@ -520,7 +534,7 @@ class HippocampalMemory:
 
     async def search_shared_memory(self, query: str, limit: int = 5, filter_tool: str = None) -> str:
         """
-        語義檢索共享記憶 (LTM)。
+        語義檢索共享記憶。同時檢索「場次特定」與「全局宏觀」兩個 Tier。
         """
         from api.config import Config
         
@@ -528,12 +542,23 @@ class HippocampalMemory:
         if filter_tool:
             filters["tool"] = filter_tool
             
-        results = await VectorStore.search(
+        # 1. Search Local Debate Memory
+        local_results = await VectorStore.search(
             collection_name=self.ltm_collection,
             query=query,
             limit=limit,
             filter_conditions=filters
         )
+        
+        # 2. Search Global Macro Memory (Cross-debate)
+        global_results = await VectorStore.search(
+            collection_name=self.global_ltm_collection,
+            query=query,
+            limit=limit,
+            filter_conditions=filters
+        )
+        
+        results = local_results + global_results
         
         if not results:
             return "No relevant memories found in shared hippocampus."
