@@ -1110,7 +1110,7 @@ def main():
                         
                         # Initialize dropdowns on page load
                         # Optimization: Focus/Click based loading
-                        chairman_dropdown.focus(force_refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
+                        demo.load(force_refresh_dropdowns, outputs=[chairman_dropdown, pro_team_dropdown, con_team_dropdown, neutral_team_dropdown])
 
 
                     
@@ -1748,7 +1748,8 @@ def main():
                         ).then(list_custom_tools, outputs=custom_tools_table)
                         
                         refresh_custom_tools_btn.click(list_custom_tools, outputs=custom_tools_table, show_progress=True)
-                        custom_tools_table.focus(list_custom_tools, outputs=custom_tools_table)
+                        # DataFrame has no .focus(), use select on parent tab or manual refresh
+                        demo.load(list_custom_tools, outputs=custom_tools_table) # Revert to load for simple tables if no parent tab select available
                     
                     # Sub-tab 2.3: 工具集管理
                     with gr.TabItem("📦 工具集管理"):
@@ -1802,10 +1803,8 @@ def main():
                                 ).then(list_toolsets, outputs=toolsets_table)
                                 
                                 # Init
-                                # demo.load(list_toolsets, outputs=toolsets_table)
-                                # demo.load(refresh_tool_choices, outputs=ts_tools)
-                                # demo.load(update_toolset_dropdown, outputs=selected_toolset_id)
-                                toolsets_table.focus(list_toolsets, outputs=toolsets_table)
+                                # toolsets_table.focus(list_toolsets, outputs=toolsets_table)
+                                demo.load(list_toolsets, outputs=toolsets_table)
                                 ts_tools.focus(refresh_tool_choices, outputs=ts_tools)
                                 selected_toolset_id.focus(update_toolset_dropdown, outputs=selected_toolset_id)
 
@@ -1861,7 +1860,7 @@ def main():
                                 sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
                                 
                                 # Init choices
-                                sector_select.focus(update_sector_choices, outputs=sector_select).then(
+                                demo.load(update_sector_choices, outputs=sector_select).then(
                                     load_tree, inputs=[sector_select], outputs=tree_view
                                 )
 
@@ -1913,8 +1912,10 @@ def main():
                                 )
                                 
                                 # Init
+                                # filter_sector.focus(update_filter_choices, outputs=filter_sector)
+                                # companies_table.focus(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
                                 filter_sector.focus(update_filter_choices, outputs=filter_sector)
-                                companies_table.focus(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
+                                demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
 
                             # 3. 證券管理 (Existing)
                             with gr.TabItem("📈 證券管理"):
@@ -2000,7 +2001,8 @@ def main():
                                 ).then(list_financial_terms, outputs=terms_table)
                                 
                                 # Init
-                                terms_table.focus(list_financial_terms, outputs=terms_table)
+                                # terms_table.focus(list_financial_terms, outputs=terms_table)
+                                demo.load(list_financial_terms, outputs=terms_table)
                                 edit_term_id.focus(update_term_dropdown, outputs=edit_term_id)
 
             # ==============================
