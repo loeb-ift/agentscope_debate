@@ -97,22 +97,24 @@ CREATE TABLE agent_toolsets (
 
 ### 2. 專用工具集 (Specialized ToolSet)
 - **手動分配**給特定 Agent
-- 針對特定任務設計，並遵循 **L1-L4 優先級體系**。
+- 針對特定任務設計，並遵循 **L1-L4 優先級體系**（下表為設計示意，而非硬性規定）。
 
 #### 工具優先級體系 (Priority Hierarchy)
 
-| 級別 | 信任等級 | 代表工具 | 治理邏輯 |
+| 級別 | 信任等級 | 代表工具（示意） | 治理邏輯 |
 | :--- | :--- | :--- | :--- |
-| **L1: 核心內部** | 🌟🌟🌟🌟🌟 | `chinatimes.*` | 核心報價與財報，免准核且優先調用。 |
-| **L2: 官方分析** | 🌟🌟🌟🌟 | `financial.pdr_reader`, `twse.*` | 全球數據與專業驗證。 |
-| **L3: 受限探索** | 🌟🌟 | `browser.*`, `search.*` | 高成本工具，需主席准核。 |
-| **L4: 測試備援** | 🌟 | `tej.*` | 僅作最後備援。 |
+| **L1: 核心內部** | 🌟🌟🌟🌟🌟 | `tej.*`, `internal.*` | 高信任內部或授權金融資料，優先調用。 |
+| **L2: 官方分析** | 🌟🌟🌟🌟 | `yfinance.stock_price`, `twse.*` | 官方/權威來源數據與專業驗證。 |
+| **L3: 受限探索** | 🌟🌟 | `searxng.search`, `duckduckgo.search`, `web.fetch` | 高成本或風險較高的開放網路探索，需較嚴格治理。 |
+| **L4: 測試備援** | 🌟 | 其他試驗性工具 | 僅作備援或實驗用途。 |
+
+> 註：早期設計中曾以 `chinatimes.*`, `financial.*`, `browser.*` 等命名作為示例，這些名稱未必在當前版本中全部實作。實際可用工具請以 `/tools` API 回傳結果與 `worker/celery_app.py` 中的註冊內容為準。
 
 ---
 
-## 現有專用工具集實作 (Real-world Implementation)
+## 專用工具集設計示例 (Design Examples)
 
-以下為目前系統中實際部署的專用工具集範例：
+以下為專用工具集的設計範例，目的在於說明如何結合「工具優先級」與「任務場景」。實際系統中啟用的工具名稱與組合，以當前程式碼與環境配置為準：
 
 **範例 1：戰略工具集 (Strategic ToolSet)**
 - **用途**: 供主席與宏觀分析師進行深度決策。
@@ -435,6 +437,118 @@ restricted_toolset = {
 4. **可擴展性** - 輕鬆添加新工具和工具集
 5. **可視化** - 前端清晰展示工具關係
 6. **安全性** - 精細控制 Agent 的工具訪問權限
+
+---
+
+## TEJ 工具錯誤處理與 Fallback 策略
+
+本章節說明「工具集架構」在實際執行時，如何與 TEJ 工具的錯誤處理、備援鏈與記憶系統治理整合，對應到實作程式碼：
+- 資料庫日期探測：`worker/debate_cycle.py:830` `_check_db_date_async`
+- 主席賽前分析：`worker/chairman.py:82` `_investigate_topic_async` 與 `pre_debate_analysis`
+- 記憶系統：`worker/memory.py` 中 HippocampalMemory 與 ReMe 系列
+
+### 1. Phase 18：資料庫日期探測 `_check_db_date_async`
+
+在辯論啟動前，系統會以台積電 `2330.TW` 作為 canary，透過 `_check_db_date_async` 探測資料庫的最新可用日期。工具調用與 fallback 鏈如下：
+
+- Primary Probe
+  - 若 `Config.ENABLE_TEJ_TOOLS == True`：
+    - 使用 `tej.stock_price` 作為主要探測工具。
+  - 若 `Config.ENABLE_TEJ_TOOLS == False`：
+    - 直接改用 `financial.get_verified_price` 作為主要探測工具。
+- Fallback 鏈（所有步驟皆有 timeout 與錯誤捕捉）：
+  1. `financial.get_verified_price`
+  2. `twse.stock_day`（以 `symbol="2330"`、當日日期為參數）
+  3. `yahoo.stock_info`（最後備援）
+
+探測結果的 metadata 會寫入 `DebateCycle.latest_db_date_meta`，欄位設計：
+
+- `source`：實際採用資料來源工具名稱  
+  - 可能值：`"tej.stock_price"`, `"financial.get_verified_price"`, `"twse.stock_day"`, `"yahoo.stock_info"`  
+  - 功能上對應設計文件中所稱的 `fallback_source`。
+- `from_fallback`：布林值，表示是否有啟用備援鏈  
+  - `False` 代表直接使用 primary tool  
+  - `True` 代表 primary 失敗、改用備援工具。
+- `error_chain`：字串，串接 primary 及各層 fallback 的錯誤原因  
+  - 功能上對應設計文件中所稱的 `fallback_reason`。
+- `tool_meta`（選擇性）：若底層工具回傳 `_meta` 欄位，會被嵌入在此，方便前端或日後排錯。
+
+當所有探測工具最終都失敗時：
+
+- `latest_db_date` 會維持為 `None`
+- `latest_db_date_meta` 仍會填入上述欄位（至少包含 `source` 與 `error_chain`），方便追蹤失敗路徑。
+
+### 2. 主席賽前分析中的 TEJ Fallback 策略
+
+主席賽前分析流程中，TEJ 工具主要出現在兩個階段：
+
+1. `Chairman._investigate_topic_async`（背景調查）
+2. `Chairman.pre_debate_analysis` 內的工具補救迴圈（當 LLM 回傳工具呼叫 JSON 時）
+
+具體策略如下：
+
+- 背景調查階段 (`_investigate_topic_async`)：
+  - 若 `Config.ENABLE_TEJ_TOOLS == True`，主席會將 `tej.company_info`、`tej.stock_price` 與 `searxng.search` 一起註冊成可用工具。
+  - LLM 若產生 `tej.*` 工具呼叫，系統調用失敗或回傳空／錯誤資料時：
+    - 若工具名稱屬於價格類（例如 `tej.stock_price`），會改由 `_fallback_from_tej_price` 執行備援查價：
+      1. 先以 `twse.stock_day` 查詢同一檔股票的當日收盤價。
+      2. 若 TWSE 仍失敗，再改用 `financial.get_verified_price`。
+    - 若工具名稱為其他類型的 `tej.*`，則自動 fallback 至 `searxng.search`，使用開放網路查找基本資訊。
+  - 成功取得資料且通過 EvidenceLifecycle 驗證後，結果以「已驗證證據」形式寫入記憶，並作為後續 7 步分析的背景資訊。
+
+- 7 步賽前分析 (`pre_debate_analysis`)：
+  - 主體分析步驟本身不再允許工具調用（系統提示中已明確要求「不要使用工具」）。
+  - 若 LLM 不符合要求，仍輸出工具呼叫 JSON（包含 `tool`、`params`），系統會：
+    - 優先執行該工具，若為 `tej.*` 且失敗，套用與上述相同的 fallback 策略：
+      - 價格類 `tej.*` → `_fallback_from_tej_price` → `twse.stock_day` → `financial.get_verified_price`
+      - 其他 `tej.*` → `searxng.search`
+    - 將工具結果以文字附加到 Prompt 中，並要求 LLM 再次輸出純 JSON 分析結果（不再讓其自主發工具）。
+
+整體來看，現有實作確保：
+
+- TEJ 工具失敗（404、空資料、暫時性錯誤）不會中斷主席流程。
+- 價格資訊會自動改用 TWSE 與內部 verified price 資料來補齊。
+- 任意非價格型 TEJ 工具失敗時，會改用 `searxng.search` 作為資料來源。
+
+### 3. 記憶系統與 TEJ 工具的條件化處理
+
+HippocampalMemory 以及共享記憶搜尋對 TEJ 工具有額外治理邏輯，避免在禁用 TEJ 的環境中殘留或泄漏舊資料：
+
+- 參數正規化 `_normalize_params`：
+  - 會從 `tool_registry` 讀取工具 schema，並將 `ticker`、`symbol` 等 alias 正規化為 `coid`。
+  - 對於 `tej.*` 工具，若 `Config.ENABLE_TEJ_TOOLS == True`，則會強制使用 `coid` 作為主鍵欄位，以提升 TEJ 查詢與記憶命中率。
+  - 若 `Config.ENABLE_TEJ_TOOLS == False`，則：
+    - 仍可呼叫非記憶相關邏輯，但 `_normalize_params` 會在處理 `tej.*` 時直接跳過，不將其寫入工作記憶索引。
+
+- 搜尋共享記憶 `search_shared_memory`：
+  - 檢索自 Qdrant 等向量庫的歷史記憶時，會根據 `tool` 欄位進行過濾：
+    - 若 `Config.ENABLE_TEJ_TOOLS == False` 且記錄中的 `tool` 以 `tej.` 開頭，該條記憶會被忽略，不出現在最終輸出。
+
+上述兩層治理確保：
+
+- 當 TEJ 工具暫時停用或在無權環境下運行時，既不會繼續寫入新的 TEJ 記憶，也不會從舊有記憶中讀出 TEJ 相關內容。
+- 當 TEJ 工具啟用時，記憶系統與工具集權限配置保持一致，保障同一層級的治理語義。
+
+### 4. 開發者注意事項：TEJ 記憶治理 Checklist
+
+在修改與 TEJ 相關邏輯時，可用以下清單快速檢查是否符合現有治理策略：
+
+- `Config.ENABLE_TEJ_TOOLS`：
+  - 新增或修改任何 `tej.*` 呼叫時，務必確認在「入口處」有尊重此旗標（禁用時不可直接打 TEJ API）。
+- 記憶寫入（HippocampalMemory.store / `_normalize_params`）：
+  - 當 `ENABLE_TEJ_TOOLS == False` 時，不得寫入任何 `tej.*` 記憶（確認有類似 `tool_name.startswith("tej.")` 的 guard）。
+  - 當 `ENABLE_TEJ_TOOLS == True` 時，與 TEJ 相關的主鍵欄位應正規化為 `coid`，避免同一公司多種代碼混用。
+- 記憶讀取（`search_shared_memory` / 其他共享記憶查詢）：
+  - 當 TEJ 關閉時，應過濾掉所有 `tool` 以 `tej.` 開頭的記憶項，避免舊資料在無權環境中被讀出。
+- Fallback 與 EvidenceLifecycle：
+  - 若 TEJ 查詢失敗（404、空資料、Recoverable error），優先走既有 fallback 鏈（金融工具 / 搜尋工具），不要直接把錯誤結果寫入記憶。
+  - 確認所有工具結果仍經由 EvidenceLifecycle 驗證後才進入快取與 LTM。
+- 測試與文件：
+  - 新增或調整 TEJ 邏輯時，建議同步補 smoke test，至少覆蓋：
+    - TEJ 開啟／關閉兩種情境。
+    - 記憶寫入是否被正確允許或拒絕。
+    - 查詢時 TEJ 記憶是否被正確過濾。
+  - 若更動行為與本節描述不同，記得同步更新本文件的 TEJ 小節。
 
 ---
 

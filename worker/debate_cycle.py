@@ -1,4 +1,5 @@
 from typing import List, Dict, Any
+from api.config import Config
 from worker.chairman import Chairman
 from worker.guardrail_agent import GuardrailAgent
 from agentscope.agent import AgentBase
@@ -17,8 +18,6 @@ from api.prompt_service import PromptService
 from api.database import SessionLocal
 import hashlib
 from worker.memory import ReMePersonalLongTermMemory, ReMeTaskLongTermMemory, ReMeToolLongTermMemory, ReMeHistoryMemory, HippocampalMemory
-from api.tool_registry import tool_registry
-from api.toolset_service import ToolSetService
 from api.redis_client import get_redis_client
 from api import models
 from mars.types.errors import ToolError, ToolRecoverableError, ToolTerminalError, ToolFatalError, TejErrorType
@@ -48,10 +47,15 @@ class DebateCycle:
         self.discovered_urls = set() # [Governance] Track URLs found in search results
         self.browse_quota = 0 # [Governance] "Search once, browse once" logic
         self.latest_db_date = None # [Phase 18] Date Awareness Handshake
+        self.latest_db_date_meta: Dict[str, Any] = {}
         
         # [Optimization] Persistent LTM instances for buffering
         self.history_memory = ReMeHistoryMemory(debate_id)
         self.tool_memory = ReMeToolLongTermMemory()
+        
+        # Lazy load tool_registry to avoid circular dependency
+        from api.tool_registry import tool_registry
+        self.tool_registry = tool_registry
         
         # [Robustness] Failure Mode Memory
         # Key: f"{agent_name}:{tool_name}:{error_type}" -> Value: {count, last_params_hash}
@@ -620,7 +624,8 @@ class DebateCycle:
         # We can reuse _agent_select_tools_async logic, but better to force equip specific report tools to ensure coverage
         report_tools = [
             # Basic
-            "tej.company_info", "tej.financial_summary", "tej.stock_price",
+            # Conditionally include TEJ tools only if enabled
+            *( ["tej.company_info", "tej.financial_summary", "tej.stock_price"] if Config.ENABLE_TEJ_TOOLS else [] ),
             "chinatimes.stock_fundamental", "internal.get_industry_tree", "searxng.search",
             # Financial Statements (Detailed)
             "chinatimes.balance_sheet", "chinatimes.income_statement",
@@ -661,7 +666,7 @@ class DebateCycle:
         ollama_tools = []
         for name in report_tools:
             try:
-                t_data = tool_registry.get_tool_data(name)
+                t_data = self.tool_registry.get_tool_data(name)
                 # Fix: description might be a dict (metadata) or a string
                 desc = t_data.get('description', '')
                 if isinstance(desc, dict):
@@ -735,7 +740,10 @@ class DebateCycle:
         
         # 1. Equip Tools (Ad-hoc)
         # Neutral needs search & basic tools
-        tools = ["searxng.search", "tej.company_info", "chinatimes.stock_fundamental"]
+        from api.config import Config
+        tools = ["searxng.search", "chinatimes.stock_fundamental"]
+        if Config.ENABLE_TEJ_TOOLS:
+            tools.insert(1, "tej.company_info")
         # Assuming we can use these tools directly via call_tool wrapper or just LLM knowledge if strong enough?
         # Better to use tools. We can reuse _agent_turn_async logic but with a specific prompt.
         
@@ -840,28 +848,95 @@ class DebateCycle:
             
             self._publish_log("System", f"🔍 正在檢測資料庫最新日期 (Probe: 2330.TW)...")
             
-            # Add timeout protection
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, call_tool, "tej.stock_price", params),
-                timeout=10.0
-            )
+            # Add timeout protection with fallback chain: verified_price -> twse.stock_day -> yahoo.stock_price
+            result = None
+            fallback_source = ""
+            fallback_reason = ""
+            primary_tool = "tej.stock_price" if Config.ENABLE_TEJ_TOOLS else "financial.get_verified_price"
+            
+            try:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, call_tool, primary_tool, params),
+                    timeout=10.0
+                )
+                if not result or (isinstance(result, dict) and (result.get("error") or not (result.get("data") or result.get("results")))):
+                    raise ValueError(f"Primary tool {primary_tool} failed or returned empty")
+            except Exception as e1:
+                fallback_reason = str(e1)
+                try:
+                    # Fallback 1: financial.get_verified_price
+                    fallback_source = "financial.get_verified_price"
+                    if primary_tool != "financial.get_verified_price":
+                        result = await asyncio.wait_for(
+                            loop.run_in_executor(None, call_tool, "financial.get_verified_price", params),
+                            timeout=8.0
+                        )
+                        if not result or (isinstance(result, dict) and (result.get("error") or not (result.get("data") or result.get("results")))):
+                            raise ValueError(f"Fallback 1 {fallback_source} failed")
+                except Exception as e2:
+                    fallback_reason += f" | {str(e2)}"
+                    try:
+                        # Fallback 2: TWSE day (for TW symbols)
+                        fallback_source = "twse.stock_day"
+                        # TWSE Adapter uses symbol + date
+                        twse_params = {"symbol": "2330", "date": datetime.now().strftime("%Y%m%d")}
+                        result = await asyncio.wait_for(
+                            loop.run_in_executor(None, call_tool, "twse.stock_day", twse_params),
+                            timeout=6.0
+                        )
+                        if not result or (isinstance(result, dict) and (result.get("error") or not (result.get("data") or result.get("rows")))):
+                            raise ValueError(f"Fallback 2 {fallback_source} failed")
+                    except Exception as e3:
+                        fallback_reason += f" | {str(e3)}"
+                        try:
+                            # Fallback 3: Yahoo price as last resort
+                            fallback_source = "yahoo.stock_info"
+                            yf_params = {"symbol": "2330.TW"}
+                            result = await asyncio.wait_for(
+                                loop.run_in_executor(None, call_tool, "yahoo.stock_info", yf_params),
+                                timeout=6.0
+                            )
+                        except Exception as e4:
+                            fallback_reason += f" | {str(e4)}"
+                            self._publish_log("System", f"❌ 日期探測全數失敗。最後嘗試: {fallback_source}, 錯誤原因: {fallback_reason}")
+                            result = None
+            
+            if fallback_source and result and not (isinstance(result, dict) and result.get("error")):
+                self._publish_log("System", f"🔄 日期探測已切換至備用來源: {fallback_source} (原因: {fallback_reason[:50]}...)")
             
             found_date = None
             if isinstance(result, dict):
-                 data = result.get("data") or result.get("results")
+                 data = result.get("data") or result.get("results") or result.get("rows")
                  if isinstance(data, list) and data:
                      row = data[0]
-                     d = row.get("mdate")
+                     d = row.get("mdate") or row.get("date")
                      if d:
                          found_date = str(d).split("T")[0]
+                 elif isinstance(result, dict) and result.get("date"):
+                     found_date = str(result.get("date")).split("T")[0]
 
             if found_date:
                 self.latest_db_date = found_date
                 self._publish_log("System", f"📅 資料庫最新數據日期確認: {self.latest_db_date}")
+                meta_source = fallback_source or primary_tool
+                meta: Dict[str, Any] = {
+                    "source": meta_source,
+                    "from_fallback": bool(fallback_source),
+                    "error_chain": fallback_reason
+                }
+                if isinstance(result, dict) and isinstance(result.get("_meta"), dict):
+                    meta["tool_meta"] = result["_meta"]
+                self.latest_db_date_meta = meta
             else:
-                self._publish_log("System", f"⚠️ 無法確認資料庫日期 (兩次探測皆失敗)。")
+                self._publish_log("System", f"⚠️ 無法確認資料庫日期 (探測皆失敗)。")
                 # Fallback: Don't set a fake date, just leave as None.
                 self.latest_db_date = None
+                meta_source = fallback_source or primary_tool
+                self.latest_db_date_meta = {
+                    "source": meta_source,
+                    "from_fallback": bool(fallback_source),
+                    "error_chain": fallback_reason or "probe_failed"
+                }
 
         except Exception as e:
             print(f"DB Handshake Failed: {e}")
@@ -1007,6 +1082,9 @@ class DebateCycle:
         """
         db = SessionLocal()
         try:
+            # Lazy import to avoid circular dependency
+            from api.toolset_service import ToolSetService
+            
             # 獲取該 Agent 可用的工具列表 (從 DB ToolSet)
             agent_id = getattr(agent, 'id', None)
             if not agent_id:
@@ -1019,7 +1097,7 @@ class DebateCycle:
                 available_tools_list = ToolSetService.get_agent_available_tools(db, agent_id)
             else:
                 # Fallback: 如果找不到 ID，列出所有工具 (或僅 Global)
-                all_tools_dict = tool_registry.list()
+                all_tools_dict = self.tool_registry.list()
                 available_tools_list = []
                 for name, data in all_tools_dict.items():
                     available_tools_list.append({"name": name, "description": data['description']})
@@ -1029,20 +1107,20 @@ class DebateCycle:
             sorted_tools = []
             
             # Define priority sets
-            # [Phase 1 Update] Hide raw 'tej.stock_price' to force use of 'financial.get_verified_price'
+            # [Phase 1 Update] Hide raw 'tej.stock_price' to force use of 'financial.get_verified_price'（若 TEJ 未啟用則自動隱藏）
             # We filter OUT tej.stock_price from the suggestion list, but keep other tej tools (like financial_summary)
             
             # [New] ChinaTimes Tools (Priority if enabled)
             chinatimes_tools = [t for t in available_tools_list if "chinatimes" in t['name']]
             
-            tej_tools = [t for t in available_tools_list if "tej" in t['name'] and t['name'] != "tej.stock_price"]
+            tej_tools = [t for t in available_tools_list if "tej" in t['name'] and t['name'] != "tej.stock_price" and Config.ENABLE_TEJ_TOOLS]
             
             # 'financial.get_verified_price' is in official_tools
             official_tools = [t for t in available_tools_list if "twse" in t['name'] or "verified" in t['name']]
             
             # Exclude chinatimes from backup/other
             backup_tools = [t for t in available_tools_list if ("yahoo" in t['name'] or "search" in t['name']) and "chinatimes" not in t['name']]
-            other_tools = [t for t in available_tools_list if t not in tej_tools and t not in official_tools and t not in backup_tools and t['name'] != "tej.stock_price" and "chinatimes" not in t['name']]
+            other_tools = [t for t in available_tools_list if t not in tej_tools and t not in official_tools and t not in backup_tools and t['name'] != "tej.stock_price" and "chinatimes" not in t['name'] and (Config.ENABLE_TEJ_TOOLS or not t['name'].startswith('tej.'))]
             
             # Helper to tag tools
             def tag_tools(tools, tag):
@@ -1164,10 +1242,16 @@ class DebateCycle:
                 # Check if chinatimes is available in registry list (hacky check on name list)
                 has_chinatimes = any("chinatimes" in t['name'] for t in available_tools_list)
                 
+                # Use lazy import to avoid circular dependency
+                from api.tool_registry import tool_registry
+                
+                available = set(t['name'] for t in available_tools_list)
                 if side == "neutral":
-                    default_tools = ["financial.get_verified_price", "twse.stock_day", "internal.search_company"]
+                    default_tools = [t for t in ["financial.get_verified_price", "twse.stock_day", "internal.search_company"] if t in available]
                 else:
-                    default_tools = ["financial.get_verified_price", "tej.financial_summary", "internal.search_company"]
+                    default_tools = [t for t in ["financial.get_verified_price", "internal.search_company"] if t in available]
+                    if Config.ENABLE_TEJ_TOOLS and "tej.financial_summary" in available:
+                        default_tools.insert(1, "tej.financial_summary")
                 
                 # Add Search Tool (Prioritize ChinaTimes if available)
                 if has_chinatimes:
@@ -1287,7 +1371,7 @@ class DebateCycle:
                 try:
                     # Using get_tool_data ensures lazy tools are loaded and schema is available
                     # Assuming version 'v1' for now as selection doesn't specify version
-                    tool_data = tool_registry.get_tool_data(name)
+                    tool_data = self.tool_registry.get_tool_data(name)
                     filtered_tools[name] = tool_data
                     
                     # Convert to Ollama tool format
@@ -1331,7 +1415,7 @@ class DebateCycle:
         # Append Meta-Tool Description
         # Dynamically fetch available groups from registry for the hint
         available_groups = set()
-        for _, t_data in tool_registry.list().items():
+        for _, t_data in self.tool_registry.list().items():
              available_groups.add(t_data.get('group', 'basic'))
         groups_str = " | ".join([f"'{g}'" for g in sorted(available_groups)])
         
@@ -1674,7 +1758,7 @@ class DebateCycle:
                                 continue
 
                         # --- [Governance Gate] Chairman Approval Check ---
-                        tool_meta = tool_registry.get_tool_data(tool_name)
+                        tool_meta = self.tool_registry.get_tool_data(tool_name)
                         if tool_meta.get("requires_approval"):
                             approval = await self._request_chairman_tool_approval(agent, tool_name, params)
                             if not approval.get("approved"):
@@ -1717,7 +1801,7 @@ class DebateCycle:
                                 
                                 # Simple Cost Model
                                 cost = 0.0
-                                if tool_name.startswith("tej."): cost = 0.03 # $0.03 per TEJ call
+                                if tool_name.startswith("tej.") and Config.ENABLE_TEJ_TOOLS: cost = 0.03 # $0.03 per TEJ call
                                 elif tool_name.startswith("financial."): cost = 0.01 # Auditor
                                 
                                 # Google Search Cost Logic
@@ -1867,7 +1951,7 @@ class DebateCycle:
 
                             # --- Tool Name Correction Logic (Legacy Fallback) ---
                             elif "not found" in error_msg or "Tool" in error_msg:
-                                all_tools = list(tool_registry.list().keys())
+                                all_tools = list(self.tool_registry.list().keys())
                                 matches = []
                                 fuzzy = difflib.get_close_matches(tool_name, all_tools, n=3, cutoff=0.4)
                                 matches.extend(fuzzy)
@@ -1925,7 +2009,7 @@ class DebateCycle:
 
 【系統提示】
 1. 請檢查上述結果中的 system_hint (若有)。
-2. 若獲得了公司 ID/Ticker，請務必繼續調用財務或股價工具 (如 tej.stock_price, tej.financial_summary) 以獲取深度數據。
+2. 若獲得了公司 ID/Ticker，請務必繼續調用財務或股價工具（例如 financial.get_verified_price 或 twse.stock_day）。若 TEJ 啟用，也可使用 `tej.stock_price`, `tej.financial_summary` 以獲取深度數據。
 3. 不要只停留在搜尋結果，請挖掘數據背後的趨勢。
 4. 如果證據已足夠支持你的論點，請輸出最終發言（純文字）。{next_prompt_suffix}
 """
@@ -1992,9 +2076,12 @@ class DebateCycle:
                                 current_prompt = f"【系統提示】延長申請已自動駁回，因為在共享記憶中發現了相關資訊：\n\n{mem_results}\n\n請利用這些資訊繼續你的論述或總結。"
                                 continue # Back to agent loop
                             
-                            # --- [Optimization Phase 1] Auto-Approve Logic ---
+                            # [Optimization Phase 1] Auto-Approve Logic ---
                             should_auto_approve = False
                             deny_reason_auto = ""
+                            
+                            # Lazy import to avoid circular dependency
+                            from api.tool_registry import tool_registry
                             
                             # Detect Loop: If reason is EXACTLY same as last time, deny auto-approve
                             if reason.strip() == last_extension_reason.strip():

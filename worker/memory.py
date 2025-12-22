@@ -10,7 +10,6 @@ import hashlib
 import random
 from datetime import datetime, time as dtime, timedelta, timezone
 from worker.tool_manager import tool_manager
-from api.tool_registry import tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +164,8 @@ class HippocampalMemory:
         """
         try:
             # 1. Get Schema
+            # Use lazy import to avoid circular dependency with api.tool_registry
+            from api.tool_registry import tool_registry
             tool_data = tool_registry.get_tool_data(tool_name, version="v1")
             schema = tool_data.get("schema", {})
             properties = schema.get("properties", {}) if schema else {}
@@ -189,8 +190,17 @@ class HippocampalMemory:
                 if k in alias_map and alias_map[k] in properties:
                     canonical_k = alias_map[k]
                 elif k in alias_map and tool_name.startswith("tej.") and alias_map[k] == "coid":
-                     # Force coid for TEJ tools even if not explicitly in some sub-schema (though it should be)
-                     canonical_k = "coid"
+                     from api.config import Config
+                     if Config.ENABLE_TEJ_TOOLS:
+                         # Force coid for TEJ tools only when TEJ is enabled
+                         canonical_k = "coid"
+                     else:
+                         canonical_k = alias_map[k]
+
+                # [Governance] TEJ Disable Filter
+                from api.config import Config
+                if not Config.ENABLE_TEJ_TOOLS and tool_name.startswith("tej."):
+                     continue # Skip indexing TEJ data if disabled
 
                 # Filter unknown params
                 if not properties or canonical_k in properties:
@@ -512,6 +522,8 @@ class HippocampalMemory:
         """
         語義檢索共享記憶 (LTM)。
         """
+        from api.config import Config
+        
         filters = {}
         if filter_tool:
             filters["tool"] = filter_tool
@@ -529,6 +541,11 @@ class HippocampalMemory:
         formatted = []
         now = time.time()
         for r in results:
+            # [Governance] TEJ Filter for Retrieval
+            tool_used = r.get("tool", "")
+            if not Config.ENABLE_TEJ_TOOLS and tool_used.startswith("tej."):
+                 continue
+
             # Check for staleness of volatile data
             is_volatile = r.get("is_volatile", False)
             timestamp = r.get("timestamp", 0)

@@ -87,9 +87,13 @@ class ChinaTimesSearchAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
         # Auto-correct aliases
         if "keyword" not in params:
-            for alias in ["q", "query", "keyword", "code", "symbol"]:
+            for alias in ["q", "query", "keyword", "code", "symbol", "stock_id", "ticker"]:
                 if alias in params:
                     params["keyword"] = params[alias]
                     break
@@ -112,7 +116,8 @@ class ChinaTimesSearchAdapter(BaseToolAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "keyword" not in params:
+            self.validate(params)
         keyword = params["keyword"]
         reason = params.get("reason", "No reason provided")
         
@@ -319,7 +324,7 @@ class ChinaTimesStockRTAdapter(BaseToolAdapter):
 
         # Auto-correct aliases
         if "code" not in params:
-            for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
+            for alias in ["symbol", "ticker", "id", "coid", "stock_id", "stock_code", "keyword", "q"]:
                 if alias in params:
                     params["code"] = params[alias]
                     break
@@ -342,7 +347,8 @@ class ChinaTimesStockRTAdapter(BaseToolAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         
         url = f"https://wantrich.chinatimes.com/api/stock_rt/{code}"
@@ -461,7 +467,8 @@ class ChinaTimesStockKlineAdapter(BaseToolAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         k_type = params.get("type", "k1")
         
@@ -625,11 +632,11 @@ class ChinaTimesStockNewsAdapter(BaseToolAdapter):
 
         # Auto-correct aliases
         if "code" not in params:
-            for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
+            for alias in ["symbol", "ticker", "id", "coid", "stock_id", "stock_code", "keyword", "q"]:
                 if alias in params:
                     params["code"] = params[alias]
                     break
-                    
+        
         if "code" not in params:
             raise ValueError("缺少必要參數: code")
 
@@ -660,7 +667,8 @@ class ChinaTimesStockNewsAdapter(BaseToolAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params or "name" not in params:
+            self.validate(params)
         code = params["code"]
         name = params["name"]
         page = params.get("page", 1)
@@ -784,6 +792,9 @@ class ChinaTimesMarketIndexAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
         pass
 
     def auth(self, req: Dict) -> Dict:
@@ -888,6 +899,9 @@ class ChinaTimesMarketRankingsAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
         pass
 
     def auth(self, req: Dict) -> Dict:
@@ -997,6 +1011,17 @@ class ChinaTimesSectorAdapter(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
+        # Auto-correct aliases
+        if "sector_id" not in params:
+            for alias in ["id", "sid", "sector", "coid"]:
+                if alias in params:
+                    params["sector_id"] = params[alias]
+                    break
+                    
         if "sector_id" not in params:
              raise ValueError("缺少必要參數: sector_id")
 
@@ -1114,12 +1139,13 @@ class ChinaTimesStockFundamentalAdapter(BaseToolAdapter):
 
         # Auto-correct aliases
         if "code" not in params:
-            for alias in ["symbol", "ticker", "id", "coid", "stock_id"]:
+            for alias in ["symbol", "ticker", "id", "coid", "stock_id", "stock_code", "keyword", "q"]:
                 if alias in params:
                     params["code"] = params[alias]
                     break
+                    
         if "code" not in params:
-             raise ValueError("缺少必要參數: code")
+            raise ValueError("缺少必要參數: code。請提供股票代碼 (e.g., 2330)。若僅知公司名稱，請先使用 'searxng.search' 或 'internal.search_company' 取得代碼。")
 
         # Clean Code
         if isinstance(params["code"], str):
@@ -1140,7 +1166,8 @@ class ChinaTimesStockFundamentalAdapter(BaseToolAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         
         url = f"https://wantrich.chinatimes.com/api/stock_check/{code}"
@@ -1193,8 +1220,16 @@ class ChinaTimesBaseFinancialAdapter(BaseToolAdapter):
         if "params" in params and isinstance(params["params"], dict):
             params.update(params["params"])
 
+        # Auto-correct aliases
+        if "code" not in params:
+            for alias in ["symbol", "ticker", "id", "coid", "stock_id", "stock_code", "keyword", "q"]:
+                if alias in params:
+                    params["code"] = params[alias]
+                    break
+        
         if "code" not in params:
             raise ValueError("缺少必要參數: code")
+
         # Clean Code
         if isinstance(params["code"], str):
             params["code"] = params["code"].split('.')[0]
@@ -1244,7 +1279,8 @@ class ChinaTimesBalanceSheetAdapter(ChinaTimesBaseFinancialAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         # 自動偵測市場類型 (Listing Detection)
         # 邏輯: 8系列、6系列通常為 OTC 或興櫃
@@ -1293,7 +1329,8 @@ class ChinaTimesIncomeStatementAdapter(ChinaTimesBaseFinancialAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
         mkt_tag = "stk_otc" if is_otc else "stk_tw"
@@ -1338,7 +1375,8 @@ class ChinaTimesCashFlowAdapter(ChinaTimesBaseFinancialAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
         mkt_tag = "stk_otc" if is_otc else "stk_tw"
@@ -1383,7 +1421,8 @@ class ChinaTimesFinancialRatiosAdapter(ChinaTimesBaseFinancialAdapter):
 
     def invoke(self, **kwargs) -> ToolResult:
         params = kwargs
-        self.validate(params)
+        if "code" not in params:
+            self.validate(params)
         code = params["code"]
         is_otc = len(code) == 4 and code.startswith(('8', '6', '5', '4'))
         mkt_tag = "stk_otc" if is_otc else "stk_tw"

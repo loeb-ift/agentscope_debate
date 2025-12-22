@@ -12,7 +12,7 @@ def call_tool(tool_name: str, params: Dict[str, Any], version: str = "v1") -> Di
     except ToolError:
         # [Fix] Allow structured ToolError to propagate to DebateCycle
         raise
-    except Exception as e:
-        # 處理未知錯誤
-        return {"error": f"An unexpected error occurred: {e}"}
+
+    # Let other exceptions propagate to be handled by DebateCycle
+
 

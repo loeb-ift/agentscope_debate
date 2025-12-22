@@ -847,6 +847,50 @@ class TEJOptionsBasicInfo(TEJBaseAdapter):
         db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
         return self._execute_query(db, "TAOPBAS", params=kwargs, filters={"coid": kwargs.get("coid")})
 
+class TEJMajorHolders(TEJBaseAdapter):
+    name = "tej.major_holders"
+    version = "v1"
+    description = """查詢上市櫃大股東持股資料 (TRAIL/TASHOP)。包含大股東姓名、持股數與持股比例。"""
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
+            },
+            "required": []
+        }
+
+    def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TASHOP", params=kwargs, filters={"coid": kwargs.get("coid")})
+
+class TEJShareholdingConcentration(TEJBaseAdapter):
+    name = "tej.shareholding_concentration"
+    version = "v1"
+    description = """查詢股權分散表資料 (TRAIL/TAVCONC)。提供不同持股分級的股東人數與比例，可用於分析籌碼集中度。"""
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "coid": {"type": "string", "description": "公司代碼 (e.g., '2330')"},
+                "start_date": {"type": "string", "description": "開始日期 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "結束日期 (YYYY-MM-DD)"},
+            },
+            "required": []
+        }
+
+    def invoke(self, **kwargs) -> ToolResult:
+        kwargs = self._flatten_params(kwargs)
+        db = os.getenv("TEJ_DATABASE_CODE", "TRAIL")
+        return self._execute_query(db, "TAVCONC", params=kwargs, filters={"coid": kwargs.get("coid")})
+
 class TEJOptionsDailyTrading(TEJBaseAdapter):
     name = "tej.options_daily_trading"
     version = "v1"

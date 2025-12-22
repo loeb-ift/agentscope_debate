@@ -76,10 +76,36 @@ class OpenAPIToolAdapter(ToolAdapter):
         }
     
     def invoke(self, **kwargs: Any) -> Dict[str, Any]:
-        """執行 API 調用，含觀測/警示、TEJ 預設參數與回傳標準化"""
+        """執行 API 調用，含參數別名適配、觀測/警示、TEJ 預設參數與回傳標準化"""
         if not self.openapi_spec:
             return {"error": "No OpenAPI spec defined"}
         
+        # 0. 參數別名適配 (Parameter Alias Adaptation)
+        # 根據 provider 與需求將常見別名轉換為標準參數名
+        params = kwargs.copy()
+        warnings: list[str] = []
+        
+        # 定義全域常見別名映射
+        ALIAS_MAP = {
+            "symbol": ["ticker", "stock_id", "coid"],
+            "ticker": ["symbol", "stock_id", "coid"],
+            "coid": ["symbol", "ticker", "stock_id", "id"],
+            "company_id": ["coid", "ticker", "symbol", "id"]
+        }
+        
+        # 取得當前工具需要的參數列表 (從 schema)
+        tool_schema = self.schema
+        expected_params = list(tool_schema.get("properties", {}).keys())
+        
+        for target, aliases in ALIAS_MAP.items():
+            # 如果工具需要 target，但 params 中沒有 target 卻有 alias
+            if target in expected_params and target not in params:
+                for alias in aliases:
+                    if alias in params:
+                        params[target] = params[alias]
+                        warnings.append(f"parameter_adapted: {alias} -> {target}")
+                        break
+
         # 1. 構建 URL
         paths = self.openapi_spec.get('paths', {})
         if not paths:
@@ -88,10 +114,7 @@ class OpenAPIToolAdapter(ToolAdapter):
         path = list(paths.keys())[0]
         url = f"{self.base_url}{path}"
         
-        # 2. 準備參數
-        params = kwargs.copy()
-        warnings: list[str] = []
-        
+        # 2. 準備參數 (已在步驟 0 完成初步適配)
         # 3. 添加認證
         if self.auth_type == "api_key":
             param_name = self.auth_config.get('param', 'api_key')

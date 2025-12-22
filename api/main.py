@@ -42,7 +42,8 @@ from adapters.tej_adapter import (
     TEJOffshoreFundHoldingsRegion, TEJOffshoreFundHoldingsIndustry, TEJOffshoreFundNAVRank,
     TEJOffshoreFundNAVDaily, TEJOffshoreFundSuspension, TEJOffshoreFundPerformance,
     TEJIFRSAccountDescriptions, TEJFinancialCoverCumulative, TEJFinancialSummaryQuarterly,
-    TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo, TEJOptionsDailyTrading
+    TEJFinancialCoverQuarterly, TEJFuturesData, TEJOptionsBasicInfo, TEJOptionsDailyTrading,
+    TEJMajorHolders, TEJShareholdingConcentration
 )
 
 # FastAPI app 先創建
@@ -72,16 +73,8 @@ app.add_middleware(
 # Redis 連線
 redis_client = get_redis_client()
 
-# Dependency
-def get_db():
-    """
-    獲取資料庫 session 的相依性函數。
-    """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Include Routers
+from api.database import get_db
 
 @app.on_event("startup")
 async def startup_event():
@@ -155,6 +148,8 @@ async def startup_event():
     tool_registry.register(TEJFuturesData())
     tool_registry.register(TEJOptionsBasicInfo())
     tool_registry.register(TEJOptionsDailyTrading())
+    tool_registry.register(TEJMajorHolders())
+    tool_registry.register(TEJShareholdingConcentration())
     
     # 載入動態工具 (DB-based)
     load_dynamic_tools()

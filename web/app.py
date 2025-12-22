@@ -292,7 +292,17 @@ def stream_debate_log(task_id):
         status_msg = f"▶️ {role} 正在發言..."
         role_lower = role.lower()
         if "chairman" in role_lower or "主席" in role:
-            icon = "👨‍⚖️"; status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
+            icon = "👨‍⚖️"
+            if "背景調查" in content:
+                status_msg = "👨‍⚖️ 主席正在發表 背景調查總結..."
+            elif "質詢" in content or "交叉" in content:
+                status_msg = "👨‍⚖️ 主席正在主持 交叉質詢環節..."
+            elif "總結" in content and "評分" not in content:
+                status_msg = "👨‍⚖️ 主席正在發表 辯論最終總結..."
+            elif "評分" in content:
+                status_msg = "👨‍⚖️ 主席正在公佈 最終評分與結果..."
+            else:
+                status_msg = f"👨‍⚖️ 主席 {role} 正在主持..."
         elif "pro" in role_lower or "正方" in role:
             icon = "🟦"; status_msg = f"🟦 正方 {role} 正在陳述觀點..."
         elif "con" in role_lower or "反方" in role:
@@ -1832,7 +1842,7 @@ def main():
                                 def update_sector_choices():
                                     return gr.update(choices=get_sector_choices())
                                 
-                                def load_tree(sector):
+                                def load_tree(sector=None):
                                     if not sector:
                                         return {"info": "請選擇一個產業以檢視結構圖 (Select a sector to view details)"}
                                     
@@ -1846,7 +1856,9 @@ def main():
                                 sector_select.change(load_tree, inputs=[sector_select], outputs=tree_view)
                                 
                                 # Init choices
-                                demo.load(update_sector_choices, outputs=sector_select)
+                                demo.load(update_sector_choices, outputs=sector_select).then(
+                                    load_tree, inputs=[sector_select], outputs=tree_view
+                                )
 
                             # 2. 公司管理 (Merged: Create + Filter/List)
                             with gr.TabItem("🏢 公司管理"):
@@ -1875,7 +1887,7 @@ def main():
                                         companies_table = gr.DataFrame(headers=["ID", "Name", "Ticker", "Sector", "Group", "Sub-industry"], wrap=True)
                                 
                                 # Actions
-                                def update_list(sec, grp, sub):
+                                def update_list(sec=None, grp=None, sub=None):
                                     return list_companies(sec, grp, sub)
                                     
                                 def update_filter_choices():
@@ -1896,8 +1908,9 @@ def main():
                                 )
                                 
                                 # Init
-                                demo.load(update_filter_choices, outputs=filter_sector)
-                                demo.load(update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table)
+                                demo.load(update_filter_choices, outputs=filter_sector).then(
+                                    update_list, inputs=[filter_sector, filter_group, filter_sub], outputs=companies_table
+                                )
 
                             # 3. 證券管理 (Existing)
                             with gr.TabItem("📈 證券管理"):
@@ -2055,7 +2068,9 @@ def main():
                 
                 refresh_replays_btn.click(update_replay_list, outputs=replay_file_dropdown)
                 
-                def on_load_replay(filename):
+                def on_load_replay(filename=None):
+                    if not filename:
+                        return "請選擇一個報告文件以檢視內容。", None
                     content = get_replay_markdown(filename)
                     if not content or content == "Error loading replay.":
                         return "無法讀取報告。", None
@@ -2077,7 +2092,9 @@ def main():
                 )
                 
                 # Init list
-                demo.load(update_replay_list, outputs=replay_file_dropdown)
+                demo.load(update_replay_list, outputs=replay_file_dropdown).then(
+                    on_load_replay, inputs=[replay_file_dropdown], outputs=[replay_viewer, download_file]
+                )
             
             # ==============================
             # Tab 6: ⚙️ 系統設置 (Settings)

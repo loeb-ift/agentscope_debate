@@ -33,7 +33,7 @@ class GoogleCSEAdapter(ToolAdapter):
             "type": "object",
             "properties": {
                 "q": {"type": "string", "description": "搜尋關鍵字"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
                 "lr": {"type": "string", "description": "語言限制 (例如 'lang_zh-TW' 僅搜尋繁體中文)"},
                 "cr": {"type": "string", "description": "國家限制 (例如 'countryTW' 僅搜尋台灣網頁)"},
                 "sort": {"type": "string", "description": "排序方式 (例如 'date' 按日期排序)"}
@@ -56,7 +56,7 @@ class GoogleCSEAdapter(ToolAdapter):
             return {"error": "Missing GOOGLE_CSE_API_KEY or GOOGLE_CSE_ID"}
 
         q = kwargs.get("q")
-        limit = int(kwargs.get("limit", 10))
+        limit = int(kwargs.get("limit", 5))
         lr = kwargs.get("lr")
         cr = kwargs.get("cr")
 

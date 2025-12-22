@@ -43,6 +43,17 @@ class TWSEStockDay(BaseToolAdapter):
         }
 
     def validate(self, params: Dict) -> None:
+        # Auto-correct nested params (Hallucination fix)
+        if "params" in params and isinstance(params["params"], dict):
+            params.update(params["params"])
+
+        # Auto-correct aliases for symbol
+        if "symbol" not in params:
+            for alias in ["code", "ticker", "id", "coid", "stock_id", "stock_code"]:
+                if alias in params:
+                    params["symbol"] = params[alias]
+                    break
+
         if "symbol" not in params:
             raise ValueError("symbol is required")
         if "date" not in params:
@@ -52,8 +63,11 @@ class TWSEStockDay(BaseToolAdapter):
         return req
 
     def invoke(self, **kwargs) -> ToolResult:
-        # Repack kwargs into params to match internal logic or just use kwargs
+        # Standardize params via validate first if called directly
+        # If called via registry, validate was already called and params mutated
         params = kwargs
+        if "symbol" not in params or "date" not in params:
+            self.validate(params)
         
         symbol = params["symbol"]
         date_str = params["date"]

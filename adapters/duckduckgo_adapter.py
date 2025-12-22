@@ -33,7 +33,7 @@ class DuckDuckGoAdapter(ToolAdapter):
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 20,
-                    "default": 10,
+                    "default": 5,
                     "description": "回傳結果數量上限"
                 }
             },
@@ -54,7 +54,7 @@ class DuckDuckGoAdapter(ToolAdapter):
         保留 duckduckgo.search 名稱，內部統一走 searxng 以降低維護成本。
         """
         q = kwargs.get("q")
-        max_results = kwargs.get("max_results", 10)
+        max_results = kwargs.get("max_results", 5)
         sx = SearXNGAdapter()
         resp = sx.invoke(q=q, limit=max_results, engines='duckduckgo')
         # resp['data'] 已是標準化格式，保持返回結構一致

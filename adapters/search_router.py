@@ -44,7 +44,7 @@ class SearchRouter(ToolAdapter):
             "type": "object",
             "properties": {
                 "q": {"type": "string", "description": "搜尋關鍵字"},
-                "limit": {"type": "integer", "default": 10},
+                "limit": {"type": "integer", "default": 5},
                 "role": {"type": "string", "description": "調用者角色 (影響路由決策)"},
                 "tier": {"type": "string", "enum": ["free", "paid"], "description": "強制指定層級 (可選)"},
                 "engines": {"type": "string", "description": "特定引擎 (僅轉發給 SearXNG, 如 'duckduckgo')"}

@@ -26,6 +26,16 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def get_db():
+    """
+    獲取資料庫 session 的相依性函數。
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 Base = declarative_base()
 
 def init_db():

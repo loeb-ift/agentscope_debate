@@ -7,7 +7,6 @@ from worker.tool_config import get_tools_description, get_recommended_tools_for_
 from api.prompt_service import PromptService
 from api.database import SessionLocal
 from api.redis_client import get_redis_client
-from api.tool_registry import tool_registry
 from worker.llm_utils import call_llm_async
 import asyncio
 from worker.evidence_lifecycle import EvidenceLifecycle
@@ -28,9 +27,6 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         self.name = name
 
     def speak(self, content: str):
-        """
-        主席發言。
-        """
         print(f"Chairman '{self.name}': {content}")
 
     def _publish_log(self, debate_id: str, content: str):
@@ -49,6 +45,39 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         except Exception as e:
             print(f"Chairman log publish error: {e}")
 
+    async def _fallback_from_tej_price(self, params: Dict[str, Any], debate_id: str = None):
+        from worker.tool_invoker import call_tool
+        loop = asyncio.get_running_loop()
+
+        symbol = params.get("coid") or params.get("symbol") or params.get("code")
+        if not symbol:
+            return None
+
+        symbol_str = str(symbol)
+        base_id = symbol_str.split(".")[0]
+
+        twse_params = {"symbol": base_id, "date": CURRENT_DATE}
+
+        try:
+            self._publish_log(debate_id, f"🔄 TEJ 股價查詢失敗，嘗試 TWSE 日收盤價：{base_id} ({CURRENT_DATE})")
+            res = await loop.run_in_executor(None, call_tool, "twse.stock_day", twse_params)
+            if res and isinstance(res, dict):
+                if res.get("error"):
+                    raise ValueError(res.get("error"))
+                rows = res.get("data") or res.get("results") or res.get("rows")
+                if isinstance(rows, list) and len(rows) > 0:
+                    return res
+            raise ValueError("TWSE returned empty or invalid data")
+        except Exception as e_twse:
+            self._publish_log(debate_id, f"⚠️ TWSE 備援失敗：{e_twse}，改用 Verified Price。")
+            try:
+                fp_params = {"symbol": symbol_str}
+                res = await loop.run_in_executor(None, call_tool, "financial.get_verified_price", fp_params)
+                return res
+            except Exception as e_v:
+                self._publish_log(debate_id, f"❌ Verified Price 備援亦失敗：{e_v}")
+                return None
+
     async def _investigate_topic_async(self, topic: str, debate_id: str = None) -> str:
         """
         Async implementation of investigation loop.
@@ -57,12 +86,14 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
         
         # 1. Prepare Tools (Search & TEJ + ODS)
         investigation_tools = []
-        target_tool_names = ["searxng.search", "tej.company_info", "tej.stock_price"]
+        from api.config import Config
+        target_tool_names = ["searxng.search"]
+        if Config.ENABLE_TEJ_TOOLS:
+            target_tool_names += ["tej.company_info", "tej.stock_price"]
         
         # [ODS Integration] Enable ODS for investigation if available
-        # Note: In real world, ODS is an agent, not a simple tool.
-        # But we can expose a tool interface "ask_data_scientist" that bridges to the agent.
-        # For now, we keep using direct tools for basic investigation to save latency.
+        # Use lazy import to avoid circular dependency with api.tool_registry
+        from api.tool_registry import tool_registry
         
         for name in target_tool_names:
             try:
@@ -142,19 +173,34 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
                     # Execute
                     from worker.tool_invoker import call_tool
                     loop = asyncio.get_running_loop()
-                    res = await loop.run_in_executor(None, call_tool, t_name, t_params)
                     
-                    # [Lifecycle 1] Ingest & Verify
-                    doc = lc.ingest(self.name, t_name, t_params, res)
-                    doc = lc.verify(doc.id)
-                    
-                    # [Lifecycle 2] Handle Status
-                    if doc.status == "VERIFIED":
-                        tool_results.append(f"工具 {t_name} 結果 (Verified): {json.dumps(res, ensure_ascii=False)}")
-                        self._publish_log(debate_id, f"✅ 證據已驗證並入庫 (ID: {doc.id})")
-                    elif doc.status == "QUARANTINE":
-                        tool_results.append(f"工具 {t_name} 結果異常 (Quarantined): {doc.verification_log[-1].get('reason')}")
-                        self._publish_log(debate_id, f"⚠️ 證據異常，已隔離。")
+                    try:
+                        res = await loop.run_in_executor(None, call_tool, t_name, t_params)
+                        if not res or (isinstance(res, dict) and (res.get("error") or not (res.get("data") or res.get("results") or res.get("content")))):
+                             raise ValueError(f"Tool {t_name} failed or returned empty")
+                    except Exception as e_tool:
+                        self._publish_log(debate_id, f"⚠️ 主席工具調用失敗 ({t_name})，嘗試 Fallback: {e_tool}")
+                        if t_name.startswith("tej."):
+                            if "price" in t_name:
+                                res = await self._fallback_from_tej_price(t_params, debate_id)
+                            else:
+                                fallback_tool = "searxng.search"
+                                self._publish_log(debate_id, f"🔄 主席自動 Fallback: {t_name} -> {fallback_tool}")
+                                res = await loop.run_in_executor(None, call_tool, fallback_tool, t_params)
+                        else:
+                            self._publish_log(debate_id, f"❌ 調查工具 {t_name} 完全失敗。")
+                            res = None
+
+                    if res:
+                        doc = lc.ingest(self.name, t_name, t_params, res)
+                        doc = lc.verify(doc.id)
+                        
+                        if doc.status == "VERIFIED":
+                            tool_results.append(f"工具 {t_name} 結果 (Verified): {json.dumps(res, ensure_ascii=False)}")
+                            self._publish_log(debate_id, f"✅ 證據已驗證並入庫 (ID: {doc.id})")
+                        elif doc.status == "QUARANTINE":
+                            tool_results.append(f"工具 {t_name} 結果異常 (Quarantined): {doc.verification_log[-1].get('reason')}")
+                            self._publish_log(debate_id, f"⚠️ 證據異常，已隔離。")
                     
         except Exception as e:
             print(f"Investigation tool error: {e}")
@@ -324,7 +370,22 @@ JSON 必須包含以下欄位：
                     # Execute the tool
                     from worker.tool_invoker import call_tool
                     loop = asyncio.get_running_loop()
-                    tool_res = await loop.run_in_executor(None, call_tool, tool_name, tool_params)
+                    
+                    try:
+                        tool_res = await loop.run_in_executor(None, call_tool, tool_name, tool_params)
+                        if not tool_res or (isinstance(tool_res, dict) and (tool_res.get("error") or not (tool_res.get("data") or tool_res.get("results") or tool_res.get("content")))):
+                             raise ValueError(f"Tool {tool_name} failed or returned empty")
+                    except Exception as e_fail:
+                        self._publish_log(debate_id, f"⚠️ 主席分析調用失敗 ({tool_name})，嘗試 Fallback: {e_fail}")
+                        if tool_name.startswith("tej."):
+                            if "price" in tool_name:
+                                tool_res = await self._fallback_from_tej_price(tool_params, debate_id)
+                            else:
+                                fallback = "searxng.search"
+                                self._publish_log(debate_id, f"🔄 主席分析 Fallback: {tool_name} -> {fallback}")
+                                tool_res = await loop.run_in_executor(None, call_tool, fallback, tool_params)
+                        else:
+                            tool_res = {"error": "Failed after fallback efforts"}
                     
                     # Append result to prompt and ask again
                     tool_res_str = json.dumps(tool_res, ensure_ascii=False)
@@ -571,11 +632,19 @@ JSON 必須包含以下欄位：
                 # print(f"ChinaTimes verification warning: {e}")
                 pass
 
-            # 1.2 Priority: TEJ Company Info (Good for Name & Sector)
+            # 1.2 Priority: TEJ Company Info (Good for Name & Sector)（若啟用）
             if not verified:
                 try:
-                    res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
-                    data = res.get("results") or res.get("data")
+                    from api.config import Config
+                    if Config.ENABLE_TEJ_TOOLS:
+                        try:
+                            res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
+                            data = res.get("results") or res.get("data")
+                        except Exception:
+                            # Fallback: skip TEJ branch
+                            data = []
+                    else:
+                        data = []  # TEJ disabled; rely on other branches
                     if data and isinstance(data, list) and len(data) > 0:
                         row = data[0]
                         # TEJ fields: cname (Chinese Name), ename (English Name), ind_name (Industry)
@@ -583,7 +652,7 @@ JSON 必須包含以下欄位：
                         
                         if official_name:
                             final_decree["subject"] = official_name
-                            self._publish_log(debate_id, f"✅ (TEJ) 名稱校正：{code} -> {official_name}")
+                            self._publish_log(debate_id, f"✅ (TEJ) 名稱校正：{code} -> {official_name}") if Config.ENABLE_TEJ_TOOLS else None
                             verified = True
                         
                         ind_name = row.get("ind_name") or row.get("tej_ind_name")
@@ -611,8 +680,24 @@ JSON 必須包含以下欄位：
                 except Exception as e:
                     pass
                 try:
-                    # Try TEJ Company Info
-                    res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
+                    # Try TEJ Company Info（若啟用）
+                    from api.config import Config
+                    if Config.ENABLE_TEJ_TOOLS:
+                        try:
+                            res = await loop.run_in_executor(None, call_tool, "tej.company_info", {"coid": code})
+                        except Exception:
+                            # try fallback tools to confirm existence/name
+                            try:
+                                from worker.tool_config import CURRENT_DATE
+                                await loop.run_in_executor(None, call_tool, "twse.stock_day", {"symbol": code, "date": CURRENT_DATE})
+                            except Exception:
+                                try:
+                                    await loop.run_in_executor(None, call_tool, "financial.get_verified_price", {"symbol": code})
+                                except Exception:
+                                    pass
+                            res = {"results": []}
+                    else:
+                        res = {"results": []}
                     # Check directly in 'results' or 'data' depending on API structure
                     # Usually TEJ tools return dict with 'results' list or 'data'
                     data = res.get("results") or res.get("data")
@@ -761,8 +846,9 @@ JSON 必須包含以下欄位：
             "google.search", # Paid/Official Google Search
             
             # Standard/Trial Tools (TEJ)
-            "tej.company_info",
-            "tej.stock_price",
+            # （可選）TEJ 工具僅在啟用時列出
+            "tej.company_info" if Config.ENABLE_TEJ_TOOLS else None,
+            "tej.stock_price" if Config.ENABLE_TEJ_TOOLS else None,
             
             # Fallback
             "searxng.search"
@@ -809,7 +895,7 @@ JSON 必須包含以下欄位：
                 - **查權威新聞/輿論** -> `chinatimes.news_search` (首選), `google.search` (付費高精準)
                 - **查基本面/財務數據** -> `chinatimes.stock_fundamental`, `chinatimes.financial_ratios` (首選)
                 - **查廣泛外部資訊** -> `google.search`
-                - **輔助數據 (若上述皆無)** -> `tej.company_info`, `tej.stock_price`
+                - **輔助數據 (若上述皆無且 TEJ 啟用)** -> `tej.company_info`, `tej.stock_price`；未啟用則改用 `financial.get_verified_price`/`twse.stock_day`
                 """
                 
                 response = await call_llm_async(
@@ -1061,6 +1147,10 @@ JSON 必須包含以下欄位：
         # Equip chairman with strategic tools for final advice refinement
         final_research_tools = []
         target_tools = ["twse.stock_day", "chinatimes.financial_ratios", "fred.get_latest_release", "worldbank.global_inflation"]
+        
+        # Lazy import to avoid circular dependency
+        from api.tool_registry import tool_registry
+        
         for t_name in target_tools:
             try:
                 t_data = tool_registry.get_tool_data(t_name)

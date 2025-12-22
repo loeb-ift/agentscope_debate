@@ -3,7 +3,6 @@
 確保所有代理對可用工具有一致的認知。
 """
 
-from api.tool_registry import tool_registry
 import json
 from datetime import datetime
 import os
@@ -33,6 +32,9 @@ def get_tools_description() -> str:
     生成工具列表的文字描述，供 prompt 使用。
     從 ToolRegistry 動態獲取，確保包含詳細的欄位說明。
     """
+    # Use lazy import to avoid circular dependency with api.tool_registry
+    from api.tool_registry import tool_registry
+    
     desc = "**可用工具列表與使用規範**：\n"
     desc += "> [!IMPORTANT]\n"
     desc += "> **瀏覽工具治理規範**：\n"
@@ -73,6 +75,16 @@ def get_tools_description() -> str:
     
     return desc
 
+from api.config import Config
+
+def _is_tool_registered(name: str) -> bool:
+    try:
+        # Use lazy import to avoid circular dependency
+        from api.tool_registry import tool_registry
+        return name in tool_registry.list()
+    except Exception:
+        return False
+
 def get_tools_examples() -> str:
     """
     生成工具調用範例，供 prompt 使用。
@@ -84,7 +96,9 @@ def get_tools_examples() -> str:
     examples += '3. 查詢最新股價: {"tool": "chinatimes.stock_rt", "params": {"symbol": "2330"}}\n'
     examples += '4. 查詢歷史報表: {"tool": "chinatimes.stock_kline", "params": {"symbol": "2330", "period": "day"}}\n'
     examples += '5. 獲取公信力股價: {"tool": "financial.get_verified_price", "params": {"symbol": "2330"}}\n'
-    examples += '6. 查詢標準化財報 (Backup): {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
+    # 僅在 TEJ 工具啟用且已註冊時，才展示 TEJ 範例
+    if Config.ENABLE_TEJ_TOOLS and _is_tool_registered("tej.financial_summary"):
+        examples += '6. 查詢標準化財報 (Backup): {"tool": "tej.financial_summary", "params": {"coid": "2330"}}\n'
     
     examples += '5. 查詢全球指數: {"tool": "av.GLOBAL_QUOTE", "params": {"symbol": "DAX"}}\n'
     examples += '6. 查詢美國 CPI: {"tool": "av.CPI", "params": {"interval": "monthly"}}\n'
@@ -110,15 +124,20 @@ def get_recommended_tools_for_topic(topic: str) -> list:
     if any(keyword in topic for keyword in ["台積電", "股價", "大盤", "台股", "2330", "上市", "上櫃"]):
         tools.extend([
             "chinatimes.stock_rt", "chinatimes.stock_kline", "financial.get_verified_price", "twse.stock_day",
-            "tej.stock_price", "tej.company_info"
         ])
+        if Config.ENABLE_TEJ_TOOLS and _is_tool_registered("tej.stock_price"):
+            tools.append("tej.stock_price")
+        if Config.ENABLE_TEJ_TOOLS and _is_tool_registered("tej.company_info"):
+            tools.append("tej.company_info")
     
     # 財務相關
     if any(keyword in topic for keyword in ["營收", "獲利", "EPS", "財報", "月增", "年增"]):
         tools.extend([
             "chinatimes.balance_sheet", "chinatimes.income_statement", "chinatimes.cash_flow", 
-            "chinatimes.financial_ratios", "tej.financial_summary"
+            "chinatimes.financial_ratios"
         ])
+        if Config.ENABLE_TEJ_TOOLS and _is_tool_registered("tej.financial_summary"):
+            tools.append("tej.financial_summary")
     
     # [Macro] 總經與全球市場相關
     if any(keyword in topic_lower for keyword in ["通膨", "利率", "cpi", "fed", "ecb", "利率", "升息", "降息", "非農"]):

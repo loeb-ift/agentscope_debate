@@ -55,7 +55,7 @@ class SearXNGAdapter(ToolAdapter):
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 20,
-                    "default": 10,
+                    "default": 5,
                     "description": "回傳結果數量限制"
                 },
                 "engines": {
@@ -83,7 +83,7 @@ class SearXNGAdapter(ToolAdapter):
             return {"error": "Missing required parameter: q (or query)"}
 
         category = kwargs.get("category", "general")
-        limit = kwargs.get("limit", 10)
+        limit = kwargs.get("limit", 5)
         engines = kwargs.get("engines")
 
         params = {"q": q, "categories": category, "format": "json"}

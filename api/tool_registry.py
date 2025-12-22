@@ -267,7 +267,7 @@ class ToolRegistry:
         """
         檢查工具的速率限制。
         """
-        if not rate_limit_config:
+        if not rate_limit_config or not self._redis_client:
             return True
 
         limit = rate_limit_config.get("limit")
@@ -277,15 +277,19 @@ class ToolRegistry:
             return True
 
         key = f"rate_limit:{tool_id}"
-        count = self._redis_client.get(key)
+        try:
+            if self._redis_client:
+                count = self._redis_client.get(key)
+                if count and int(count) >= limit:
+                    return False
 
-        if count and int(count) >= limit:
-            return False
-
-        pipe = self._redis_client.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, period)
-        pipe.execute()
+                pipe = self._redis_client.pipeline()
+                pipe.incr(key)
+                pipe.expire(key, period)
+                pipe.execute()
+        except Exception as e:
+            print(f"⚠️ Rate limit check failed: {e}")
+            return True # Fail open
 
         return True
 
@@ -409,6 +413,12 @@ class ToolRegistry:
             return {"error": "Rate limit exceeded"}
 
         # 2. 參數驗證
+        if hasattr(tool, "validate"):
+            try:
+                tool.validate(params)
+            except Exception as e:
+                return {"error": f"Parameter validation failed: {str(e)}"}
+
         if schema:
             try:
                 validate(instance=params, schema=schema)
@@ -420,16 +430,19 @@ class ToolRegistry:
         # [Cache Bypass] Check if bypass is requested
         bypass_cache = params.pop("_bypass_cache", False)
         
-        if cache_ttl and cache_ttl > 0:
+        if cache_ttl and cache_ttl > 0 and self._redis_client:
             cache_key = self._get_cache_key(tool_id, params, exclude_params=cache_exclude)
             
             if not bypass_cache:
-                cached_result = self._redis_client.get(cache_key)
-                if cached_result:
-                    result = json.loads(cached_result)
-                    result["used_cache"] = True
-                    result["_meta"] = {"exec_time": 0, "source": "cache"}
-                    return result
+                try:
+                    cached_result = self._redis_client.get(cache_key)
+                    if cached_result:
+                        result = json.loads(cached_result)
+                        result["used_cache"] = True
+                        result["_meta"] = {"exec_time": 0, "source": "cache"}
+                        return result
+                except Exception as e:
+                    print(f"⚠️ Cache read failed: {e}")
 
         # 4. 執行工具
         try:
@@ -457,10 +470,13 @@ class ToolRegistry:
         
         # 5. 寫入快取 (Selective Caching)
         # 只有當結果沒有錯誤時才緩存，或者可以緩存錯誤但時間較短
-        if cache_key and cache_ttl and cache_ttl > 0:
+        if cache_key and cache_ttl and cache_ttl > 0 and self._redis_client:
             is_error = isinstance(result, dict) and "error" in result
             if not is_error:
-                self._redis_client.set(cache_key, json.dumps(result), ex=cache_ttl)
+                try:
+                    self._redis_client.set(cache_key, json.dumps(result), ex=cache_ttl)
+                except Exception as e:
+                    print(f"⚠️ Cache write failed: {e}")
             else:
                 # Optional: Cache errors for a shorter time (e.g., 60s) to prevent hammering
                 # self._redis_client.set(cache_key, json.dumps(result), ex=60)
