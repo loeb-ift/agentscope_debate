@@ -1735,6 +1735,36 @@ class DebateCycle:
 
                         # --- Regular Tool Execution ---
                         
+                        # [Phase 25] Pre-Search Justification Audit
+                        if "search" in tool_name:
+                            justification = params.get("justification", "")
+                            insight = params.get("expected_insight", "")
+                            
+                            self._publish_log(agent.name, f"🧐 正在提交搜尋理由：『{justification}』")
+                            
+                            # Audit logic: Check if justification makes sense given the Decree
+                            # We use a very fast internal LLM check for this.
+                            audit_p = f"""
+                            分析搜尋請求的合理性。
+                            討論主體：{getattr(self, 'topic_decree', {}).get('subject')}
+                            搜尋關鍵字：{params.get('q')}
+                            Agent 理由：{justification}
+                            預期獲得：{insight}
+                            
+                            要求：
+                            1. 如果搜尋理由與討論主體明顯不符（例如：主體是 SI 公司，理由卻要查光電產品），請判定為 REJECTED。
+                            2. 輸出格式：{{"status": "PASSED" | "REJECTED", "reason": "..."}}
+                            """
+                            try:
+                                audit_res_raw = await call_llm_async(audit_p, system_prompt="你是搜尋稽核員。", context_tag=f"{self.debate_id}:SearchAudit")
+                                audit_res = json.loads(re.search(r'\{.*\}', audit_res_raw, re.DOTALL).group(0))
+                                
+                                if audit_res.get("status") == "REJECTED":
+                                    self._publish_log("System", f"🛑 搜尋請求被攔截：{audit_res.get('reason')}")
+                                    current_prompt = f"【系統攔截】你的搜尋請求 `{params.get('q')}` 被駁回。\n理由：{audit_res.get('reason')}\n請重新思考你的搜尋策略，確保與主體事實保持一致。"
+                                    continue # Skip this tool call and back to LLM
+                            except: pass
+                        
                         # [STRICT TOOL VALIDATION]
                         # Check if the tool is in the equipped list for this agent
                         equipped_tools = self.agent_tools_map.get(agent.name, [])

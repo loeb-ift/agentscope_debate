@@ -61,9 +61,17 @@ class SearXNGAdapter(ToolAdapter):
                 "engines": {
                     "type": "string",
                     "description": "指定特定引擎 (如 'google', 'bing', 'duckduckgo')，留空則自動聚合最佳來源"
+                },
+                "justification": {
+                    "type": "string",
+                    "description": "[必填] 為什麼你需要進行此搜尋？請說明此 Query 與辯題及主席鎖定實體（Decree）的邏輯關聯性。"
+                },
+                "expected_insight": {
+                    "type": "string",
+                    "description": "[必填] 你預期從搜尋結果中獲得什麼具體事實或數據？"
                 }
             },
-            "required": ["q"]
+            "required": ["q", "justification", "expected_insight"]
         }
 
     def describe(self) -> Dict[str, Any]:
