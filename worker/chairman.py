@@ -138,25 +138,14 @@ class Chairman(AgentBase, ChairmanFacilitationMixin):
                 # [Governance] industry_tree is the ONLY source for Industry classification
                 res_tree = await loop.run_in_executor(None, call_tool, "internal.get_industry_tree", {"symbol": code})
                 if res_tree and not res_tree.get("error"):
-                    # 🚀 [Atomic Extraction]: Extract directly from the most authoritative field
-                    if isinstance(res_tree, dict):
-                        # Priority 1: Direct field check (Fast & Reliable)
-                        raw_ind = res_tree.get("industry") or res_tree.get("category")
-                        
-                        # Priority 2: SI Keyword Detection (Physical Override)
-                        tree_str = json.dumps(res_tree, ensure_ascii=False)
-                        if any(k in tree_str for k in ["資訊服務", "系統整合", "Software", "SI", "Integration"]):
-                            industry_truth = "資訊服務業 / 系統整合 (SI)"
-                        else:
-                            industry_truth = raw_ind
-                    
-                    if not industry_truth:
-                        # Fallback to LLM only if fields are missing but tool returned something
-                        label_p = f"分析此產業樹數據，提取該公司的核心產業標籤。只回傳標籤文字。\n數據：{json.dumps(res_tree, ensure_ascii=False)}"
-                        industry_truth = await call_llm_async(label_p, system_prompt="精密產業分析師。")
+                    # 🚀 [Pure Governance]: Extract clean label from official data without Python-level hardcoding.
+                    # This leverages the specialized analyst persona to interpret the raw tree result.
+                    tree_str = json.dumps(res_tree, ensure_ascii=False)
+                    label_p = f"你現在是精密產業分析師。請分析此產業鏈樹數據，提取該公司的核心產業標籤（如：資訊服務業、半導體業）。嚴禁憑空猜測，必須嚴格忠於數據內容。只回傳標籤文字。\n數據：{tree_str}"
+                    industry_truth = await call_llm_async(label_p, system_prompt="數據忠誠分析師。")
                     
                     self._publish_log(debate_id, f"✅ 官方產業標籤已確認：{industry_truth}")
-                    tree_info = f"\n【官方產業鏈】: {json.dumps(res_tree, ensure_ascii=False)}"
+                    tree_info = f"\n【官方產業鏈】: {tree_str}"
                 else:
                     self._publish_log(debate_id, f"❌ 產業樹工具獲取失敗。")
                     tree_info = ""
