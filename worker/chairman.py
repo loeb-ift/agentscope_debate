@@ -950,7 +950,19 @@ JSON 必須包含以下欄位：
         
         try:
             # Step 1: 提取股票代碼
-            stock_codes = self._extract_stock_codes_from_topic(topic, handcard)
+            # [Fix] Also consider the decree (subject/code) if available in self
+            stock_codes = []
+            if hasattr(self, 'topic_decree') and self.topic_decree:
+                code = self.topic_decree.get("code")
+                if code and code != "Unknown":
+                    # Clean code (e.g. 2330.TW -> 2330.TW)
+                    if "." not in code and re.match(r'^\d{4}$', str(code)):
+                        stock_codes.append(f"{code}.TW")
+                    else:
+                        stock_codes.append(str(code))
+            
+            if not stock_codes:
+                stock_codes = self._extract_stock_codes_from_topic(topic, handcard)
             
             if not stock_codes:
                 self._publish_log(debate_id, "⚠️ 未能識別股票代碼，跳過 EDA 分析")
@@ -997,13 +1009,26 @@ JSON 必須包含以下欄位：
         # 嘗試從 topic 提取（格式：2330.TW, 8942, etc.）
         pattern = r'\b(\d{4})(?:\.(?:TW|TWO))?\b'
         matches = re.findall(pattern, topic)
-        codes.extend([f"{code}.TW" for code in matches])
+        for code in matches:
+            if "." not in code:
+                codes.append(f"{code}.TW")
+            else:
+                codes.append(code)
         
         # 嘗試從 handcard 提取
         if handcard:
-            handcard_str = json.dumps(handcard, ensure_ascii=False) if isinstance(handcard, dict) else str(handcard)
+            handcard_str = json.dumps(handcard, ensure_ascii=False) if isinstance(handcard, (dict, list)) else str(handcard)
             matches = re.findall(pattern, handcard_str)
-            codes.extend([f"{code}.TW" for code in matches])
+            for code in matches:
+                if "." not in code:
+                    codes.append(f"{code}.TW")
+                else:
+                    codes.append(code)
+        
+        # [Fallback] Check for common names mapping
+        for name, code in STOCK_CODES.items():
+            if name in topic:
+                codes.append(f"{code}.TW" if "." not in code else code)
         
         # 去重
         return list(set(codes))
