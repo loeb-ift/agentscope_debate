@@ -532,15 +532,19 @@ class HippocampalMemory:
         await self._buffer_ltm_item(item)
         await self._flush_ltm_buffer()
 
-    async def search_shared_memory(self, query: str, limit: int = 5, filter_tool: str = None) -> str:
+    async def search_shared_memory(self, query: str, limit: int = 5, filter_tool: str = None, filter_coid: str = None) -> str:
         """
         語義檢索共享記憶。同時檢索「場次特定」與「全局宏觀」兩個 Tier。
+        加入 [Phase 26] Strict Metadata Filter 防止跨公司污染。
         """
         from api.config import Config
         
         filters = {}
         if filter_tool:
             filters["tool"] = filter_tool
+        if filter_coid:
+            # 強制過濾特定公司代碼，防止台積電數據混入敦陽辯論
+            filters["coid"] = filter_coid
             
         # 1. Search Local Debate Memory
         local_results = await VectorStore.search(
@@ -551,11 +555,12 @@ class HippocampalMemory:
         )
         
         # 2. Search Global Macro Memory (Cross-debate)
+        # Macro 數據通常不帶 coid，所以不套用 filter_coid 以便共享
         global_results = await VectorStore.search(
             collection_name=self.global_ltm_collection,
             query=query,
             limit=limit,
-            filter_conditions=filters
+            filter_conditions={k: v for k, v in filters.items() if k != "coid"}
         )
         
         results = local_results + global_results
@@ -570,6 +575,11 @@ class HippocampalMemory:
             tool_used = r.get("tool", "")
             if not Config.ENABLE_TEJ_TOOLS and tool_used.startswith("tej."):
                  continue
+                 
+            # [Phase 26 Security] Double check coid mismatch in results (Extra guard)
+            res_coid = r.get("coid")
+            if filter_coid and res_coid and str(res_coid) != str(filter_coid):
+                continue # Skip mismatched company data
 
             # Check for staleness of volatile data
             is_volatile = r.get("is_volatile", False)

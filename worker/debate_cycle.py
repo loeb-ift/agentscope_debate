@@ -1590,7 +1590,21 @@ class DebateCycle:
                 
                 # Guardrail Logic: Intercept final speech or reasoning steps
                 if not is_tool_call:
-                    check_context = f"Topic: {self.topic}\nLast Evidence: {str(collected_evidence[-1]) if collected_evidence else 'None'}"
+                    # [Phase 26] Name-Code Integrity Check (TSMC-2480 prevention)
+                    # Scan for suspicious name/code combinations in the text
+                    error_patterns = [
+                        (r"台積電.*2480", "台積電的正確代碼是 2330，非 2480 (這是敦陽的代碼)。"),
+                        (r"敦陽.*2330", "敦陽的正確代碼是 2480，非 2330 (這是台積電的代碼)。"),
+                        (r"2480.*Net Margin.*40%", "2480 (敦陽) 的淨利率不可能高達 40%，這可能是台積電的數據。"),
+                        (r"2330.*Net Margin.*10%", "2330 (台積電) 的淨利率不可能低至 10%，這可能是其他公司的數據。")
+                    ]
+                    for pattern, fix_hint in error_patterns:
+                        if re.search(pattern, response, re.IGNORECASE):
+                            self._publish_log("Guardrail", f"🛑 攔截到嚴重的實體代碼混淆：{fix_hint}")
+                            current_prompt = f"【系統強行攔截：實體混淆警告】\n你的回答中出現了嚴重的錯誤：{fix_hint}\n請立即校正你的事實認知，不要將不同公司的代碼與數據混為一談，並重新輸出正確的論點。"
+                            continue # Back to LLM
+
+                    check_context = f"Topic: {self.topic}\nDecree: {json.dumps(getattr(self, 'topic_decree', {}), ensure_ascii=False)}\nLast Evidence: {str(collected_evidence[-1]) if collected_evidence else 'None'}"
                     audit_result = self.guardrail_agent.check(agent.name, response, check_context)
                     
                     if audit_result["status"] == "REJECTED":
